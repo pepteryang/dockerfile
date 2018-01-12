@@ -1,0 +1,65 @@
+ 错误描述：
+ Get https://10.254.0.1:443/api/v1/endpoints?resourceVersion=0: dial tcp 10.254.0.1:443: getsockopt: connection refused
+解决办法如下：
+https://github.com/kubernetes/kubeadm/issues/193
+
+具体方法：
+开启防火墙的转发功能
+sysctl net.ipv4.conf.all.forwarding=1
+iptables -P FORWARD ACCEPT
+kube-proxy的设置中间包含：
+--cluster-cidr=.
+#--cluster-cidr 的值为 CIDR 定义的范围
+
+下面是一些常用的命令：
+ kubectl describe  pods/kube-dns-719950670-87ljb  --namespace=kube-system
+
+[root@k8s-master dns]#  kubectl describe svc kube-dns --namespace=kube-system
+Name:			kube-dns
+Namespace:		kube-system
+Labels:			addonmanager.kubernetes.io/mode=Reconcile
+			k8s-app=kube-dns
+			kubernetes.io/cluster-service=true
+			kubernetes.io/name=KubeDNS
+Annotations:		<none>
+Selector:		k8s-app=kube-dns
+Type:			ClusterIP
+IP:			10.254.0.2
+Port:			dns	53/UDP
+Endpoints:		10.10.29.2:53
+Port:			dns-tcp	53/TCP
+Endpoints:		10.10.29.2:53
+Session Affinity:	None
+Events:			<none>
+
+ 查看kube-dns 使用的认证秘钥
+ [root@k8s-master dns]# kubectl get secret --all-namespaces
+NAMESPACE     NAME                               TYPE                                  DATA      AGE
+default       default-token-jq1zx                kubernetes.io/service-account-token   3         2h
+kube-public   default-token-lv5n4                kubernetes.io/service-account-token   3         5d
+kube-system   dashboard-token-lwmws              kubernetes.io/service-account-token   3         4d
+kube-system   default-token-w1rq3                kubernetes.io/service-account-token   3         5d
+kube-system   efk-token-jv109                    kubernetes.io/service-account-token   3         1h
+kube-system   heapster-token-ngq4s               kubernetes.io/service-account-token   3         3h
+kube-system   kube-dns-token-pfqzd               kubernetes.io/service-account-token   3         18m
+kube-system   kubernetes-dashboard-token-qp5lt   kubernetes.io/service-account-token   3         3h
+kube-system   registry.peter.com.key             kubernetes.io/dockerconfigjson        1         3h
+
+[root@k8s-master dns]# kubectl describe secrets kube-dns-token-pfqzd --namespace=kube-system
+Name:		kube-dns-token-pfqzd
+Namespace:	kube-system
+Labels:		<none>
+Annotations:	kubernetes.io/service-account.name=kube-dns
+		kubernetes.io/service-account.uid=fdc4f310-7b4b-11e7-91f6-000c29c6b82d
+
+Type:	kubernetes.io/service-account-token
+
+Data
+====
+token:		eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJrdWJlcm5ldGVzL3NlcnZpY2VhY2NvdW50Iiwia3ViZXJuZXRlcy5pby9zZXJ2aWNlYWNjb3VudC9uYW1lc3BhY2UiOiJrdWJlLXN5c3RlbSIsImt1YmVybmV0ZXMuaW8vc2VydmljZWFjY291bnQvc2VjcmV0Lm5hbWUiOiJrdWJlLWRucy10b2tlbi1wZnF6ZCIsImt1YmVybmV0ZXMuaW8vc2VydmljZWFjY291bnQvc2VydmljZS1hY2NvdW50Lm5hbWUiOiJrdWJlLWRucyIsImt1YmVybmV0ZXMuaW8vc2VydmljZWFjY291bnQvc2VydmljZS1hY2NvdW50LnVpZCI6ImZkYzRmMzEwLTdiNGItMTFlNy05MWY2LTAwMGMyOWM2YjgyZCIsInN1YiI6InN5c3RlbTpzZXJ2aWNlYWNjb3VudDprdWJlLXN5c3RlbTprdWJlLWRucyJ9.eb8qxfb28u47ZLImjvNMfGE4rdiiTAuh2rJIXnI601Xb6rGtu-hkxsvu3rD_6sLic77f1bdf9vBCm0_bpTUO-BFH5bygZvlFp4_vORzFTAb46bI0ygHq-7E8nEac0oMAI-4uCjFTaH8ILL9yTccW4n-60-_R34Ngqw5fTKWj5geXiOtwFzK1N7B2XU6y8MnDkigz7St9udO7typPoq4Pewc6FzZ6PYUJyO7Il5orx5QcRkA99Y2HFeD--BMyEauBwfr1S69Up-fRPedVeLqGzkFp22JGEIh74rzTn4vMrGvyhS7LdC_v09tfbZbKylFDsP63JfGk9Zhj9XJFkocTlA
+ca.crt:		1363 bytes
+namespace:	11 bytes
+
+
+查看kube-dns的启动日志
+ kubectl logs --namespace=kube-system $(kubectl get pods --namespace=kube-system -l k8s-app=kube-dns -o name) -c kubedns

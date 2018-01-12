@@ -1,0 +1,79 @@
+#!/bin/bash
+
+cp /home/bqadm/k8s/server/bin/flannel/* /usr/local/bin/
+
+--------------------------------------------------------------------------------
+##################设置flanneld系统启动
+cat >/lib/systemd/system/flanneld.service  <<'PETER'
+[Unit]
+Description=Flanneld overlay address etcd agent
+After=network.target
+After=network-online.target
+Wants=network-online.target
+After=etcd.service
+Before=docker.service
+[Service]
+Type=notify
+ExecStart=/usr/local/bin/flanneld \
+-etcd-cafile=/etc/kubernetes/ssl/k8s-root-ca.pem \
+-etcd-certfile=/etc/kubernetes/ssl/kubernetes.pem \
+-etcd-keyfile=/etc/kubernetes/ssl/kubernetes-key.pem \
+-etcd-endpoints=https://10.83.36.59:2379,https://10.83.36.60:2379,https://10.83.36.61:2379 \
+-etcd-prefix=/kubernetes/network \
+-iface=eth0
+ExecStartPost=/usr/local/bin/mk-docker-opts.sh -k DOCKER_NETWORK_OPTIONS -d /run/flannel/docker
+Restart=on-failure
+[Install]
+WantedBy=multi-user.target
+RequiredBy=docker.service
+PETER
+
+
+
+cat > /lib/systemd/system/docker.service << 'PETER'
+[Unit]
+Description=Docker Application Container Engine
+Documentation=https://docs.docker.com
+After=network-online.target firewalld.service
+Wants=network-online.target
+
+[Service]
+Type=notify
+# the default is not to use systemd for cgroups because the delegate issues still
+# exists and systemd currently does not support the cgroup feature set required
+# for containers run by docker
+Environment="PATH=/bin:/sbin:/usr/bin:/usr/sbin"
+EnvironmentFile=-/run/flannel/docker
+ExecStart=/usr/bin/dockerd --log-level=error $DOCKER_NETWORK_OPTIONS
+#ExecStart=/usr/bin/dockerd
+ExecReload=/bin/kill -s HUP $MAINPID
+# Having non-zero Limit*s causes performance problems due to accounting overhead
+# in the kernel. We recommend using cgroups to do container-local accounting.
+LimitNOFILE=infinity
+LimitNPROC=infinity
+LimitCORE=infinity
+# Uncomment TasksMax if your systemd version supports it.
+# Only systemd 226 and above support this version.
+#TasksMax=infinity
+TimeoutStartSec=0
+# set delegate yes so that systemd does not reset the cgroups of docker containers
+Delegate=yes
+# kill only the docker process, not all processes in the cgroup
+KillMode=process
+# restart the docker process if it exits prematurely
+Restart=on-failure
+StartLimitBurst=3
+StartLimitInterval=60s
+
+[Install]
+WantedBy=multi-user.target
+PETER
+
+
+
+
+systemctl daemon-reload
+systemctl enable flanneld
+systemctl start flanneld
+systemctl restart docker
+

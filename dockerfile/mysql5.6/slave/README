@@ -1,0 +1,37 @@
+https://blog.kublr.com/setting-up-mysql-replication-clusters-in-kubernetes-ab7cbac113a5
+
+
+
+Build the Docker Image
+Having setup the replication cluster, we’ll modify the Docker file and build a Docker image with MySQL. Again, we follow the official guidance based on the MySQL Docker image.
+For the master: 
+Edit the Dockerfile, and add the following lines:
+#
+RUN sed -i '/\[mysqld\]/a server-id=1\nlog-bin' /etc/mysql/mysql.conf.d/mysqld.cnf
+
+Edit docker-entrypoint.sh file to create a user and password for replication:
+
+
+echo "CREATE USER '$MYSQL_REPLICATION_USER'@'%' IDENTIFIED BY '$MYSQL_REPLICATION_PASSWORD' ;" | "${mysql[@]}"
+echo "GRANT REPLICATION SLAVE ON *.* TO '$MYSQL_REPLICATION_USER'@'%' IDENTIFIED BY '$MYSQL_REPLICATION_PASSWORD' ;" | "${mysql[@]}"
+echo 'FLUSH PRIVILEGES ;' | "${mysql[@]}"
+
+
+We use environment variables MYSQL_REPLICATION_USER and MYSQL_REPLICATION_PASSWORD for user and password configuration. These environment variables will be set while the pod is created in Kubernetes.
+Click the link to view the dockerfile and docker-entrypoint.sh for building the master.
+For the slave:
+Edit the Dockerfile, and add the following lines:
+
+RUN RAND="$(date +%s | rev | cut -c 1-2)$(echo ${RANDOM})" && sed -i '/\[mysqld\]/a server-id='$RAND'\nlog-bin' /etc/mysql/mysql.conf.d/mysqld.cnf
+
+
+The server-id use random number. 
+Edit docker-entrypoint.sh to add the master.
+
+echo "STOP SLAVE;" | "${mysql[@]}"
+echo "CHANGE MASTER TO master_host='$MYSQL_MASTER_SERVICE_HOST', master_user='$MYSQL_REPLICATION_USER', master_password='$MYSQL_REPLICATION_PASSWORD' ;" | "${mysql[@]}"
+echo "START SLAVE;" | "${mysql[@]}"
+
+
+The master host is MYSQL_MASTER_SERVICE_HOST which will be the service name of the master pod in Kubernetes. For more information visit Kubernetes’ container lifecycle hooks guide.
+Click the link to view the docker-entrypoint.sh for building the slave.

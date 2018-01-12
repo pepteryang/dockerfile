@@ -1,0 +1,63 @@
+cat > /etc/kubernetes/config << EOF
+# kubernetes system config
+#
+# The following values are used to configure various aspects of all
+# kubernetes services, including
+#
+#   kube-apiserver.service
+#   kube-controller-manager.service
+#   kube-scheduler.service
+#   kubelet.service
+#   kube-proxy.service
+# logging to stderr means we get it in the systemd journal
+KUBE_LOGTOSTDERR="--logtostderr=true"
+
+# journal message level, 0 is debug
+KUBE_LOG_LEVEL="--v=0"
+
+# Should this cluster be allowed to run privileged docker containers
+KUBE_ALLOW_PRIV="--allow-privileged=true"
+
+# How the controller-manager, scheduler, and proxy find the apiserver
+KUBE_MASTER="--master=http://10.2.35.25:8080"
+EOF
+
+cat > /etc/kubernetes/controller-manager << EOF
+# The following values are used to configure the kubernetes controller-manager
+
+# defaults from config and apiserver should be adequate
+
+# Add your own!
+KUBE_CONTROLLER_MANAGER_ARGS="--address=127.0.0.1 --service-cluster-ip-range=10.254.0.0/16 \\
+    --cluster-name=kubernetes \\
+    --cluster-signing-cert-file=/etc/kubernetes/ssl/ca.pem \\
+    --cluster-signing-key-file=/etc/kubernetes/ssl/ca-key.pem  \\
+    --service-account-private-key-file=/etc/kubernetes/ssl/ca-key.pem \\
+    --root-ca-file=/etc/kubernetes/ssl/ca.pem \\
+    --leader-elect=true"
+EOF
+
+
+
+cat > /usr/lib/systemd/system/kube-controller-manager.service << EOF
+Description=Kubernetes Controller Manager
+Documentation=https://github.com/GoogleCloudPlatform/kubernetes
+
+[Service]
+EnvironmentFile=-/etc/kubernetes/config
+EnvironmentFile=-/etc/kubernetes/controller-manager
+ExecStart=/usr/local/bin/kube-controller-manager \\
+    \$KUBE_LOGTOSTDERR \\
+    \$KUBE_LOG_LEVEL \\
+    \$KUBE_MASTER \\
+    \$KUBE_CONTROLLER_MANAGER_ARGS
+Restart=on-failure
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+systemctl daemon-reload
+systemctl enable kube-controller-manager
+systemctl restart kube-controller-manager

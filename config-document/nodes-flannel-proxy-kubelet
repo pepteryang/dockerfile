@@ -1,0 +1,207 @@
+cat > /etc/sysconfig/flanneld <<EOF
+# Flanneld configuration options  
+
+# etcd url location.  Point this to the server where etcd runs
+FLANNEL_ETCD_ENDPOINTS="https://10.2.35.25:2379"
+
+# etcd config key.  This is the configuration key that flannel queries
+# For address range assignment
+FLANNEL_ETCD_PREFIX="/k8s/network"
+
+# Any additional options that you want to pass
+FLANNEL_OPTIONS="-etcd-cafile=/etc/kubernetes/ssl/ca.pem -etcd-certfile=/etc/kubernetes/ssl/kubernetes.pem -etcd-keyfile=/etc/kubernetes/ssl/kubernetes-key.pem"
+EOF
+
+cat > /usr/lib/systemd/system/flanneld.service << EOF
+[Unit]
+Description=Flanneld overlay address etcd agent
+After=network.target
+After=network-online.target
+Wants=network-online.target
+After=etcd.service
+Before=docker.service
+
+[Service]
+Type=notify
+EnvironmentFile=/etc/sysconfig/flanneld
+EnvironmentFile=-/etc/sysconfig/docker-network
+ExecStart=/usr/local/bin/flanneld-start \$FLANNEL_OPTIONS
+ExecStartPost=/usr/local/bin/mk-docker-opts.sh -k DOCKER_NETWORK_OPTIONS -d /run/flannel/docker
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
+RequiredBy=docker.service
+EOF
+
+cat > /usr/local/bin/flanneld-start << EOF
+#!/bin/sh
+
+exec /usr/local/bin/flanneld \
+	-etcd-endpoints=\${FLANNEL_ETCD_ENDPOINTS:-\${FLANNEL_ETCD}} \\
+	-etcd-prefix=\${FLANNEL_ETCD_PREFIX:-\${FLANNEL_ETCD_KEY}} \\
+	"\$@"
+EOF
+ln -s /opt/flannel/{flanneld,mk-docker-opts.sh} /usr/local/bin/
+chmod +x /usr/local/bin/flanneld-start
+
+systemctl daemon-reload
+systemctl enable flanneld
+systemctl restart flanneld
+
+
+
+#*******************************************************#
+#  如下命令在NODE端执行  设置kubelet的认证参数          #
+#*******************************************************#
+
+
+cat > /etc/kubernetes/config << EOF
+# kubernetes system config
+#
+# The following values are used to configure various aspects of all
+# kubernetes services, including
+#
+#   kube-apiserver.service
+#   kube-controller-manager.service
+#   kube-scheduler.service
+#   kubelet.service
+#   kube-proxy.service
+# logging to stderr means we get it in the systemd journal
+KUBE_LOGTOSTDERR="--logtostderr=true"
+
+# journal message level, 0 is debug
+KUBE_LOG_LEVEL="--v=0"
+
+# Should this cluster be allowed to run privileged docker containers
+KUBE_ALLOW_PRIV="--allow-privileged=true"
+
+# How the controller-manager, scheduler, and proxy find the apiserver
+KUBE_MASTER="--master=https://10.2.35.25:6443"
+EOF
+
+##########################
+cat >  /etc/kubernetes/kubelet << EOF
+## kubernetes kubelet (minion) config
+#
+## The address for the info server to serve on (set to 0.0.0.0 or "" for all interfaces)
+KUBELET_ADDRESS="--address=10.2.35.21"
+#
+## The port for the info server to serve on
+KUBELET_PORT="--port=10250"
+#
+## You may leave this blank to use the actual hostname
+KUBELET_HOSTNAME="--hostname-override=10.2.35.21"
+#
+## location of the api-server (new version myber)
+#KUBELET_API_SERVER="--api-servers=http://10.2.35.21:8080"
+#
+## pod infrastructure container
+KUBELET_POD_INFRA_CONTAINER="--pod-infra-container-image=registry.access.redhat.com/rhel7/pod-infrastructure:latest"
+#
+## Add your own!
+KUBELET_ARGS="--cgroup-driver=cgroupfs \\
+--cluster-dns=10.254.0.2 \\
+--experimental-bootstrap-kubeconfig=/etc/kubernetes/bootstrap.kubeconfig \\
+--kubeconfig=/etc/kubernetes/kubelet.kubeconfig \\
+--require-kubeconfig \\
+--cert-dir=/etc/kubernetes/ssl \\
+--cluster-domain=cluster.local. \\
+--hairpin-mode promiscuous-bridge \\
+--serialize-image-pulls=false"
+EOF
+
+cat > /usr/lib/systemd/system/kubelet.service << EOF
+[Unit]
+Description=Kubernetes Kubelet Server
+Documentation=https://github.com/GoogleCloudPlatform/kubernetes
+After=docker.service
+Requires=docker.service
+
+[Service]
+WorkingDirectory=/var/lib/kubelet
+EnvironmentFile=-/etc/kubernetes/config
+EnvironmentFile=-/etc/kubernetes/kubelet
+ExecStart=/usr/local/bin/kubelet \\
+    \$KUBE_LOGTOSTDERR \\
+    \$KUBE_LOG_LEVEL \\
+    \$KUBELET_API_SERVER \\
+    \$KUBELET_ADDRESS \\
+    \$KUBELET_PORT \\
+    \$KUBELET_HOSTNAME \\
+    \$KUBE_ALLOW_PRIV \\
+    \$KUBELET_POD_INFRA_CONTAINER \\
+    \$KUBELET_ARGS
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+
+cat > /etc/kubernetes/proxy << EOF
+###
+# kubernetes proxy config
+
+# default config should be adequate
+
+# Add your own!
+KUBE_PROXY_ARGS="--bind-address=10.2.35.21 \\
+--hostname-override=10.2.35.21 \\
+--kubeconfig=/etc/kubernetes/kube-proxy.kubeconfig \\
+--cluster-cidr=10.254.0.0/16"
+EOF
+
+
+cat > /usr/lib/systemd/system/kube-proxy.service << EOF
+[Unit]
+Description=Kubernetes Kube-Proxy Server
+Documentation=https://github.com/GoogleCloudPlatform/kubernetes
+After=network.target
+
+[Service]
+EnvironmentFile=-/etc/kubernetes/config
+EnvironmentFile=-/etc/kubernetes/proxy
+ExecStart=/usr/local/bin/kube-proxy \\
+        \$KUBE_LOGTOSTDERR \\
+        \$KUBE_LOG_LEVEL \\
+        \$KUBE_MASTER \\
+        \$KUBE_PROXY_ARGS
+Restart=on-failure
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target 
+EOF
+
+#####################################################
+#生成客户端的kubelet.kubeconfig,默认在~/.kube/config
+#####################################################
+KUBE_APISERVER="https://10.2.35.25:6443"
+
+#设置集群参数
+kubectl config set-cluster kubernetes \
+--certificate-authority=/etc/kubernetes/ssl/ca.pem \
+--embed-certs=true \
+--server=${KUBE_APISERVER}
+#设置客户端认证参数
+kubectl config set-credentials admin \
+--client-certificate=/etc/kubernetes/ssl/admin.pem \
+--embed-certs=true \
+--client-key=/etc/kubernetes/ssl/admin-key.pem
+# 设置上下文参数
+kubectl config set-context kubernetes \
+--cluster=kubernetes \
+--user=admin
+#设置默认上下文
+kubectl config use-context kubernetes
+
+cp ~/.kube/config /etc/kubernetes/kubelet.kubeconfig
+ln -s /opt/kubernetes/bin/{kubectl,kubelet,kube-proxy} /usr/local/bin/
+chmod +x /opt/kubernetes/bin/{kubectl,kubelet,kube-proxy}
+
+systemctl daemon-reload
+systemctl enable kubelet kube-proxy
+systemctl start kubelet kube-proxy
+systemctl status kubelet kube-proxy

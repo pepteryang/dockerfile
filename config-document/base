@@ -1,0 +1,2 @@
+进入容器查看：
+kubectl exec -ti  elasticsearch-logging-v1-clsjn /bin/bash --namespaces=kube-system

@@ -1,0 +1,48 @@
+global_defs {
+    router_id LVS_DEVEL  #虚拟路由名称
+}
+
+#HAProxy健康检查配置
+vrrp_script chk_haproxy {
+    script "/usr/bin/killall -0 haproxy"  #使用killall -0检查haproxy实例是否存在，性能高于ps命令
+    interval 2   #脚本运行周期
+    weight 2   #每次检查的加权权重值
+}
+
+#虚拟路由配置
+vrrp_instance VI_1 {
+    state MASTER           #本机实例状态，MASTER/BACKUP，备机配置文件中请写BACKUP
+    interface ens160       #本机网卡名称，使用ifconfig命令查看
+    virtual_router_id 45   #虚拟路由编号，主备机保持一致
+    priority 150           #本机初始权重，备机请填写小于主机的值（例如100）
+    advert_int 1           #争抢虚地址的周期，秒
+    authentication {
+         auth_type PASS
+         auth_pass 9987
+    }
+    virtual_ipaddress {
+        10.2.35.240       #虚地址IP，主备机保持一致
+    }
+    track_script {
+        chk_haproxy        #对应的健康检查配置
+    }
+}
+
+#虚拟路由配置(双主配置)
+vrrp_instance VI_2 {
+    state BACKUP           #本机实例状态，MASTER/BACKUP，备机配置文件中请写BACKUP
+    interface ens160       #本机网卡名称，使用ifconfig命令查看
+    virtual_router_id 55   #虚拟路由编号，主备机保持一致
+    priority 100           #本机初始权重，备机请填写小于主机的值（例如100）
+    advert_int 1           #争抢虚地址的周期，秒
+    authentication {
+         auth_type PASS
+         auth_pass 9989
+    }
+    virtual_ipaddress {
+        10.2.35.250        #虚地址IP，主备机保持一致
+    }
+    track_script {
+        chk_haproxy        #对应的健康检查配置
+    }
+}

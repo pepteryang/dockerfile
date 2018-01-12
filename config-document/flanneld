@@ -1,0 +1,62 @@
+KUBE_EXEC_BIN_DIR=/usr/local/bin
+ETCD_IP="10.2.35.25"
+ln -s /opt/flannel/flanneld /usr/local/bin/flanneld
+ln -s /opt/flannel/mk-docker-opts.sh /usr/local/bin/mk-docker-opts.sh
+
+
+################配置FLANNELD文件(参照yum 安装的设置相关文件）
+cat > /etc/sysconfig/flanneld << EOF
+# Flanneld configuration options  
+
+# etcd url location.  Point this to the server where etcd runs
+FLANNEL_ETCD_ENDPOINTS="https://${ETCD_IP}:2379"
+
+# etcd config key.  This is the configuration key that flannel queries
+# For address range assignment
+FLANNEL_ETCD_PREFIX="/k8s/network"
+
+# Any additional options that you want to pass
+FLANNEL_OPTIONS="-etcd-cafile=/etc/kubernetes/ssl/ca.pem -etcd-certfile=/etc/kubernetes/ssl/kubernetes.pem -etcd-keyfile=/etc/kubernetes/ssl/kubernetes-key.pem"
+EOF
+#####################设置flannel的
+cat > ${KUBE_EXEC_BIN_DIR}/flanneld-start << EOF
+#!/bin/sh
+
+exec ${KUBE_EXEC_BIN_DIR}/flanneld \\
+	-etcd-endpoints=\${FLANNEL_ETCD_ENDPOINTS:-\${FLANNEL_ETCD}} \\
+	-etcd-prefix=\${FLANNEL_ETCD_PREFIX:-\${FLANNEL_ETCD_KEY}} \\
+	"\$@"
+EOF
+--------------------------------------------------------------------------------
+##################设置flanneld系统启动
+cat > /usr/lib/systemd/system/flanneld.service << EOF
+[Unit]
+Description=Flanneld overlay address etcd agent
+After=network.target
+After=network-online.target
+Wants=network-online.target
+After=etcd.service
+Before=docker.service
+
+[Service]
+Type=notify
+EnvironmentFile=/etc/sysconfig/flanneld
+EnvironmentFile=-/etc/sysconfig/docker-network
+ExecStart=${KUBE_EXEC_BIN_DIR}/flanneld-start \$FLANNEL_OPTIONS
+ExecStartPost=${KUBE_EXEC_BIN_DIR}/mk-docker-opts.sh -k DOCKER_NETWORK_OPTIONS -d /run/flannel/docker
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
+RequiredBy=docker.service
+EOF
+
+systemctl daemon-reload
+systemctl enable flanneld
+systemctl start flanneld
+systemctl start docker
+
+@设置DOCKER的网络
+Environment="PATH=/bin:/sbin:/usr/bin:/usr/sbin"
+EnvironmentFile=-/run/flannel/docker
+ExecStart=/usr/bin/dockerd --log-level=error $DOCKER_NETWORK_OPTIONS

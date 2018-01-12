@@ -1,0 +1,148 @@
+#!/bin/bash
+
+ssl_source_dir=/opt/cfssl/ssl
+ssl_target_dir="/etc/kubernetes/ssl"
+mkdir /var/lib/etcd
+sudo mkdir -pv {${ssl_source_dir},${ssl_target_dir}}
+sudo cp -rf ${ssl_source_dir}/kubernetes.pem  ${ssl_target_dir}/kubernetes.pem
+sudo cp -rf ${ssl_source_dir}/k8s-root-ca.pem ${ssl_target_dir}/k8s-root-ca.pem
+
+cat >node1-etcd.service  <<'PETER'
+[Unit]
+Description=Etcd Server
+After=network.target
+After=network-online.target
+Wants=network-online.target
+Documentation=https://github.com/coreos
+[Service]
+Type=notify
+WorkingDirectory=/var/lib/etcd/
+EnvironmentFile=-/etc/etcd/etcd.conf
+ExecStart=/usr/local/bin/etcd \
+--name=etcd01 \
+--cert-file=/etc/kubernetes/ssl/kubernetes.pem \
+--key-file=/etc/kubernetes/ssl/kubernetes-key.pem \
+--peer-cert-file=/etc/kubernetes/ssl/kubernetes.pem \
+--peer-key-file=/etc/kubernetes/ssl/kubernetes-key.pem \
+--trusted-ca-file=/etc/kubernetes/ssl/k8s-root-ca.pem \
+--peer-trusted-ca-file=/etc/kubernetes/ssl/k8s-root-ca.pem \
+--initial-advertise-peer-urls=https://10.83.36.59:2380 \
+--listen-peer-urls=https://10.83.36.59:2380 \
+--listen-client-urls=https://10.83.36.59:2379,http://127.0.0.1:2379 \
+--advertise-client-urls=https://10.83.36.59:2379 \
+--initial-cluster-token=etcd-cluster-0 \
+--initial-cluster=etcd01=https://10.83.36.59:2380,etcd02=https://10.83.36.60:2380,etcd03=https://10.83.36.61:2380 \
+--initial-cluster-state=new \
+--data-dir=/var/lib/etcd
+Restart=on-failure
+RestartSec=5
+LimitNOFILE=65536
+[Install]
+WantedBy=multi-user.target
+PETER
+
+cat >node2-etcd.service  <<'PETER'
+[Unit]
+Description=Etcd Server
+After=network.target
+After=network-online.target
+Wants=network-online.target
+Documentation=https://github.com/coreos
+[Service]
+Type=notify
+WorkingDirectory=/var/lib/etcd/
+EnvironmentFile=-/etc/etcd/etcd.conf
+ExecStart=/usr/local/bin/etcd \
+--name=etcd02 \
+--cert-file=/etc/kubernetes/ssl/kubernetes.pem \
+--key-file=/etc/kubernetes/ssl/kubernetes-key.pem \
+--peer-cert-file=/etc/kubernetes/ssl/kubernetes.pem \
+--peer-key-file=/etc/kubernetes/ssl/kubernetes-key.pem \
+--trusted-ca-file=/etc/kubernetes/ssl/k8s-root-ca.pem \
+--peer-trusted-ca-file=/etc/kubernetes/ssl/k8s-root-ca.pem \
+--initial-advertise-peer-urls=https://10.83.36.60:2380 \
+--listen-peer-urls=https://10.83.36.60:2380 \
+--listen-client-urls=https://10.83.36.60:2379,http://127.0.0.1:2379 \
+--advertise-client-urls=https://10.83.36.60:2379 \
+--initial-cluster-token=etcd-cluster-0 \
+--initial-cluster=etcd01=https://10.83.36.59:2380,etcd02=https://10.83.36.60:2380,etcd03=https://10.83.36.61:2380 \
+--initial-cluster-state=new \
+--data-dir=/var/lib/etcd
+Restart=on-failure
+RestartSec=5
+LimitNOFILE=65536
+[Install]
+WantedBy=multi-user.target
+PETER
+
+cat >node3-etcd.service  <<'PETER'
+[Unit]
+Description=Etcd Server
+After=network.target
+After=network-online.target
+Wants=network-online.target
+Documentation=https://github.com/coreos
+[Service]
+Type=notify
+WorkingDirectory=/var/lib/etcd/
+EnvironmentFile=-/etc/etcd/etcd.conf
+ExecStart=/usr/local/bin/etcd \
+--name=etcd02 \
+--cert-file=/etc/kubernetes/ssl/kubernetes.pem \
+--key-file=/etc/kubernetes/ssl/kubernetes-key.pem \
+--peer-cert-file=/etc/kubernetes/ssl/kubernetes.pem \
+--peer-key-file=/etc/kubernetes/ssl/kubernetes-key.pem \
+--trusted-ca-file=/etc/kubernetes/ssl/k8s-root-ca.pem \
+--peer-trusted-ca-file=/etc/kubernetes/ssl/k8s-root-ca.pem \
+--initial-advertise-peer-urls=https://10.83.36.60:2380 \
+--listen-peer-urls=https://10.83.36.60:2380 \
+--listen-client-urls=https://10.83.36.60:2379,http://127.0.0.1:2379 \
+--advertise-client-urls=https://10.83.36.60:2379 \
+--initial-cluster-token=etcd-cluster-0 \
+--initial-cluster=etcd01=https://10.83.36.59:2380,etcd02=https://10.83.36.60:2380,etcd03=https://10.83.36.61:2380 \
+--initial-cluster-state=new \
+--data-dir=/var/lib/etcd
+Restart=on-failure
+RestartSec=5
+LimitNOFILE=65536
+[Install]
+WantedBy=multi-user.target
+PETER
+
+
+#启动etcd之前先设置集群网络
+#检查集群健康
+     # etcdctl \
+      # --ca-file=/etc/kubernetes/ssl/k8s-root-ca.pem\
+      # --cert-file=/etc/kubernetes/ssl/kubernetes.pem \
+      # --key-file=/etc/kubernetes/ssl/kubernetes-key.pem \
+      # member list
+
+
+    # ----------
+
+
+      # etcdctl --endpoints=https://10.83.36.59:2379,https://10.83.36.60:2379,https://10.83.36.61:2379 \
+      # --ca-file=/etc/kubernetes/ssl/k8s-root-ca.pem \
+      # --cert-file=/etc/kubernetes/ssl/kubernetes.pem \
+      # --key-file=/etc/kubernetes/ssl/kubernetes-key.pem \
+      # mkdir /kubernetes/network
+
+
+    # ----------
+
+
+    # etcdctl --endpoints=https://10.83.36.59:2379,https://10.83.36.60:2379,https://10.83.36.61:2379\
+      # --ca-file=/etc/kubernetes/ssl/k8s-root-ca.pem\
+      # --cert-file=/etc/kubernetes/ssl/kubernetes.pem \
+      # --key-file=/etc/kubernetes/ssl/kubernetes-key.pem \
+      # set /kubernetes/network/config '{ "Network": "172.20.0.0/16", "Backend": { "Type": "vxlan", "VNI": 1 }}'
+     
+
+    # ----------
+
+    # etcdctl --endpoints=https://10.83.36.59:2379,https://10.83.36.60:2379,https://10.83.36.61:2379\
+      # --ca-file=/etc/kubernetes/ssl/k8s-root-ca.pem\
+      # --cert-file=/etc/kubernetes/ssl/kubernetes.pem \
+      # --key-file=/etc/kubernetes/ssl/kubernetes-key.pem \
+      # get /kubernetes/network/config

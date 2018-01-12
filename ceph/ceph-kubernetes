@@ -1,0 +1,140 @@
+#在部署好CEPH集群后开和keubernetes集成
+
+#-------------------------------------------------
+#使用ceph生成的客服端秘钥生成kubernetes的secret,
+#在ceph上面操作
+#-------------------------------------------------
+ceph auth get-key client.admin|base64
+
+#-------------------------------------------------
+#在kubernetes上面生成ceph-secret 访问密钥
+#-------------------------------------------------
+
+cat > ceph-secret.yaml << EOF
+apiVersion: v1
+kind: Secret
+metadata:
+  name: ceph-secret
+type: "kubernetes.io/rbd"  
+data:
+  key: QVFBdm5qNWEwVjdtRkJBQW1PUGY0UHBUU3VrcmtIYmNCNGtoaUE9PQ==
+EOF
+
+#-------------------------------------------------
+#创建secret,方便后续使用
+#-------------------------------------------------
+
+kubectl create -f ceph-secret.yaml
+
+#-------------------------------------------------
+#创建磁盘资源，以供kubernetes使用
+#PV是集群的资源，PVC请求资源并检查资源是否可用
+#-------------------------------------------------
+
+rbd create StorageClass -s 50G
+
+sudo rbd info es-volume
+
+#-------------------------------------------------
+#rbd image 'kube-test':
+#	size 10240 MB in 2560 objects
+#	order 22 (4096 kB objects)
+#	block_name_prefix: rbd_data.10382ae8944a
+#	format: 2
+#	features: layering
+#	flags: 
+#-------------------------------------------------
+
+#-------------------------------------------------
+#开始创建系统的PV资源（es-volume-pv.yaml）
+#-------------------------------------------------
+cat > es-volume-pv.yaml << EOF
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: es-volume-pv
+spec:
+  capacity:
+    storage: 2Gi
+  accessModes:
+    - ReadWriteOnce
+  rbd:
+    monitors:
+      - 10.2.35.32:6789
+      - 10.2.35.33:6789
+      - 10.2.35.34:6789
+      - 10.2.35.35:6789
+    pool: rbd
+    image: es-volume
+    user: admin
+    secretRef:
+      name: ceph-secret
+    fsType: xfs
+    readOnly: false
+  persistentVolumeReclaimPolicy: Recycle
+EOF
+#-------------------------------------------------
+
+#-------------------------------------------------
+#开始创建系统的PVC资源（es-volume-pvc.yaml）
+#-------------------------------------------------
+cat > es-volume-pvc.yaml << EOF
+kind: PersistentVolumeClaim
+apiVersion: v1
+metadata:
+  name: es-volume-claim
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 2Gi
+EOF
+#-------------------------------------------------
+#创建一个 deployment 测试一下
+#-------------------------------------------------
+apiVersion: extensions/v1beta1 
+kind: Deployment 
+metadata: 
+  name: nginx-dm
+spec: 
+  replicas: 1
+  template: 
+    metadata: 
+      labels: 
+        name: nginx 
+    spec: 
+      containers: 
+        - name: nginx 
+          image: nginx:alpine 
+          imagePullPolicy: IfNotPresent
+          ports: 
+            - containerPort: 80
+          volumeMounts:
+            - name: ceph-rbd-volume
+              mountPath: "/usr/share/nginx/html"
+      volumes:
+      - name: ceph-rbd-volume
+        persistentVolumeClaim:
+          claimName: test-claim
+#-------------------------------------------------
+#导入 yaml 文件
+#-------------------------------------------------
+
+kubecte create -f test-pv.yaml
+kubectl create -f test-pvc.yaml
+kubectl apply -f nginx-deplyment.yaml 
+
+
+#-------------------------------------------------
+#查看分区
+#查看pods 测试，在一个老的pod中创建文件，在新的POD中是否存在
+#-------------------------------------------------
+
+kubectl exec -it nginx-dm-1697116629-j4m1g -- df -h
+
+kubectl exec -it nginx-dm-1697116629-j4m1g -- touch /usr/share/nginx/html/jicki.html
+
+kubectl delete pod/nginx-dm-1697116629-j4m1g
+
+kubectl exec -it nginx-dm-1697116629-v2n52 -- ls -lt /usr/share/nginx/html

@@ -1,0 +1,119 @@
+# 删除 osd 如果创建出错，请删除 osd
+
+# 使用 ceph osd tree 查看出错的 osd.id
+
+ceph osd out id   提出集群
+
+# 登陆所在 服务器 停止服务
+
+systemctl stop ceph-osd@id
+
+# 然后再执行  crush remove 删除 tree
+
+ceph osd crush remove osd.id
+
+# 最后 执行 auth del 和 rm 删除
+
+ceph auth del osd.id 
+
+ceph osd rm id
+
+# 在运行 tree 已经不存在了
+# 如果使用分区挂载 还需要 登陆 osd 节点中 umount 分区
+# 使用 lsblk 查看挂载
+# 如: /dev/sdb 被挂载
+
+umount /dev/sdb
+ceph-disk zap /dev/sdb
+
+Error 2
+
+# 如果暴力删除了 osd 然后重建了 osd
+
+ceph -s
+
+报错 stale+active+undersized+degraded+remapped
+
+# 执行 ceph health detail 查看所有报错的信息
+
+# 执行 ceph pg <pgid> query  查看具体信息
+# 如果执行 query 报错
+# 使用 ceph pg force_create_pg <pgid>  覆盖错误
+
+# 如果 datail 有很多 pgid 出错 使用 for 循环去跑
+
+for pg in `ceph health detail | grep "stale+active+undersized+degraded" | awk '{print $2}' | sort | uniq`; 
+do 
+  ceph pg force_create_pg $pg
+done
+
+# 如果仍然不能解决问题，那么请使用暴力方法
+# 重建ceph 集群 删除集群所有文件,重新部署
+
+systemctl stop ceph-osd.target
+systemctl stop ceph-mon.target
+
+
+rm -rf /etc/ceph/*
+rm -rf /var/log/ceph/*
+rm -rf /var/lib/ceph/*
+
+# osd 清除挂载 目录的里的所有内容
+
+# 卸载 ceph
+yum -y remove ceph ceph-radosgw
+
+# 重新安装 
+yum -y install ceph ceph-radosgw
+
+# 在 osd 节点 创建目录
+mkdir -p /var/lib/ceph/osd/
+
+无法删除 rbd image
+
+# 删除报错
+
+[root@ceph-node-1 ~]# rbd rm test-image
+2017-07-07 11:41:39.733710 7f7a55898d80 -1 librbd: image has watchers - not removing
+Removing image: 0% complete...failed.
+rbd: error: image still has watchers
+This means the image is still open or the client using it crashed. Try again after closing/unmapping it or waiting 30s for the crashed client to timeout.
+
+
+# 查看 状态 与 客户端连接
+
+[root@ceph-node-1 ~]# rbd status test-image
+Watchers:
+        watcher=172.16.1.29:0/1324761697 client.14212 cookie=1
+        watcher=172.16.1.42:0/3859462470 client.14226 cookie=1
+
+
+# 登陆所在 服务器 29
+
+[root@k8s-node-29 ~]# rbd showmapped
+id pool image              snap device    
+0  rbd  test-image         -    /dev/rbd0 
+
+
+# 执行 rbd unmap
+
+[root@k8s-node-29 ~]# rbd unmap /dev/rbd0
+
+
+# 登陆所在 服务器 42
+
+[root@k8s-node-42 ~]# rbd showmapped
+id pool image              snap device    
+0  rbd  test-image         -    /dev/rbd0 
+
+
+# 执行 rbd unmap
+
+[root@k8s-node-42 ~]# rbd unmap /dev/rbd0 
+
+
+# 最后执行 rbd rm
+
+[root@ceph-node-1 ~]# rbd rm test-image
+Removing image: 100% complete...done.
+

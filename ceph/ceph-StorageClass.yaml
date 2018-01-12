@@ -1,0 +1,27 @@
+kind: StorageClass
+apiVersion: storage.k8s.io/v1
+metadata:
+  name: minipaas
+  annotations:
+     storageclass.beta.kubernetes.io/is-default-class: "true"
+provisioner: kubernetes.io/rbd
+parameters:
+  monitors: 10.83.36.59:6789,10.83.36.60:6789,10.83.36.61:6789
+  adminId: admin
+  adminSecretName: ceph-secret
+  adminSecretNamespace: default
+  pool: rbd
+  userId: admin
+  userSecretName: ceph-secret-user
+  # fsType: ext4
+  # imageFormat: "2"
+  # imageFeatures: "layering"    
+# 　　● monitors：Ceph的monitor，逗号分隔。该参数是必须的。
+# 　　● adminId：Ceph的客户端ID，可在pool中创建镜像。默认的是“admin”。
+# 　　● adminSecretNamespace：adminSecret的命名空间，默认值是“default”。
+# 　　● adminSecretName：adminId的Secret Name。改参数是必须的，提供的秘钥必须有类型“kubernetes.io/rbd”。
+# 　　● pool：Ceph的RBD pool，默认值是“rbd”。
+# 　　● userId：Ceph的客户ID，用于映射RBD镜像的，默认值和adminId参数相同。
+# 　　● userSecretName：Ceph Secret的名称，userId用该参数来映射RBD镜像。它必须和PVC在相同的命名空间。该参数也是必须的。提供的秘钥必须有类型“kubernetes.io/rbd”。比如，按照下面的方式来创建：
+    
+    

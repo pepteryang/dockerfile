@@ -1,0 +1,16 @@
+apiVersion: extensions/v1beta1
+kind: Ingress
+metadata:
+  annotations:
+    ingress.kubernetes.io/upstream-fail-timeout: "30"
+  namespace: nginx-ingress
+  name: nginx-ingress-bl
+spec:
+  rules:
+  - host: www.peter.com
+    http:
+      paths:
+      - backend:
+          serviceName: nginx-ingress
+          servicePort: 18080
+        path: /nginx_status

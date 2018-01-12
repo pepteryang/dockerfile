@@ -1,0 +1,33 @@
+cat > /usr/lib/systemd/system/kube-scheduler.service <<EOF
+[Unit]
+Description=Kubernetes Scheduler Plugin
+Documentation=https://github.com/GoogleCloudPlatform/kubernetes
+
+[Service]
+EnvironmentFile=/etc/kubernetes/config
+EnvironmentFile=/etc/kubernetes/scheduler
+ExecStart=/usr/local/bin/kube-scheduler \\
+            \$KUBE_LOGTOSTDERR \\
+            \$KUBE_LOG_LEVEL \\
+            \$KUBE_MASTER \\
+            \$KUBE_SCHEDULER_ARGS
+Restart=on-failure
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+cat > /etc/kubernetes/scheduler << EOF
+###
+# kubernetes scheduler config
+
+# default config should be adequate
+
+# Add your own!
+KUBE_SCHEDULER_ARGS="--leader-elect=true --address=127.0.0.1"
+EOF
+
+systemctl daemon-reload
+systemctl enable kube-scheduler
+systemctl restart kube-scheduler

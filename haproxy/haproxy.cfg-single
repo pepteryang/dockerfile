@@ -1,0 +1,69 @@
+global
+	log 127.0.0.1   local1 notice #info级（及以上）的日志推送到 rsyslog 的 local0 接口
+	log 127.0.0.1 local1 warning
+	maxconn 65535   #每个进程可用的最大连接数
+	nbproc  8  #进程数量，可以设置多个，提高处理效率
+	uid 500  #运行haproxy的用户uid（cat /etc/passwd查看）
+	gid 500  #运行haproxy的组uid（cat /etc/group查看）
+	daemon   #以后台守护进程运行
+	pidfile /usr/local/haproxy/haproxy.pid  #将所有进程写入pid文件
+	#debug   #调试模式
+	#quiet   #安装模式
+
+
+defaults
+	log     global
+	mode    http #运行模式tcp、http、health
+	option  httplog
+	option  http-pretend-keepalive  #服务器端保持长连接
+	option  http-server-close   #每次请求完毕后主动关闭http通道
+	option  forceclose    #服务端响应后主动关闭请求连接，及早释放服务连接，不必等到客户端应答确认
+	option  httpclose       #每次请求完毕后主动关闭http通道
+	option  dontlognull  #不记录健康检查的日志信息
+	option  redispatch  #如果后端有服务器宕机，强制切换到正常服务器
+	option  abortonclose  #丢弃由于客户端等待时间过长而关闭连接但仍在haproxy等待队列中的请求
+	option  forwardfor  except 127.0.0.0/8  #不记录本机转发的日志
+	option  originalto  #记录客户端访问的目的IP
+	maxconn  65535  #每个进程可用的最大连接数
+	balance source  #同一IP地址的所有请求都发送到同一服务器
+	retries 3   #三次连接失败，则判断服务不可用
+	timeout connect 5000ms  #连接server端超时5s
+    timeout client 50000ms  #客户端响应超时50s
+    timeout server 50000ms 
+	timeout check 5s  #检测超时
+	timeout http-request 5s  #http请求超时时间
+	timeout queue 30s  #一个请求在队列里的超时时间
+	timeout http-keep-alive  5s  #设置http-keep-alive的超时时间
+
+listen admin_stats 
+    bind 0.0.0.0:1080
+    log 127.0.0.1 local3 err 
+    stats refresh 30s  #HAProxy监控页面统计自动刷新时间。
+    #设置监控页面URL路径。 http：//IP:1080/haproxy-status可查看
+    stats uri /haproxy-status
+    #统计页面密码框提示信息
+    stats realm welcome login\ Haproxy
+    #登录统计页面用户和密码
+    stats auth admin:123456
+    #隐藏HAProxy版本信息
+    stats hide-version
+    #设置TURE后可在监控页面手工启动关闭后端真实服务器
+    stats admin if TRUE
+
+frontend http-in #前端服务http-in
+	acl web hdr(host) -i *.peter.com
+    bind*:80  #监听端口
+    option forwardfor header X-Forwarded-For
+    default_backend servers if web  #请求转发至名为"servers"的后端服务
+
+
+backend  servers  #设置负载均衡模式，source保存session值，roundrobin轮询模式
+	balance roundrobin 
+	option forwardfor header X-Forwarded-For
+	server  k8s-node1  10.2.35.21:1808  check inter 2000 rise 3 fall  3  weight 30
+	server  k8s-node2  10.2.35.27:1808  check inter 2000 rise 3 fall  3  weight 30
+	errorfile 403 /etc/haproxy/errorfiles/403.http
+	errorfile 500 /etc/haproxy/errorfiles/500.http
+	errorfile 502 /etc/haproxy/errorfiles/502.http
+	errorfile 503 /etc/haproxy/errorfiles/503.http
+	errorfile 504 /etc/haproxy/errorfiles/504.http

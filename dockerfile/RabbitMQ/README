@@ -1,0 +1,2 @@
+docker build -t sz33sitqdb00ap0007.bf.cn/public/rabbitmq:3.7.2 .
+docker push sz33sitqdb00ap0007.bf.cn/public/rabbitmq:3.7.2

@@ -1,0 +1,144 @@
+#  install
+
+1、安装好后，需要更加admin-role.yaml 创建访问规则。创建其他用户的需改用户名就可以了，这时候可以使用 创建用户的TOKEN进行登录访问前端
+
+关于token 的查询：
+
+[root@SZ33SITQDB00AP0002 ~]# kubectl get secrets -n kube-system -o wide
+NAME                               TYPE                                  DATA      AGE
+admin-token-gkmw6                  kubernetes.io/service-account-token   3         1h
+coredns-token-5w7db                kubernetes.io/service-account-token   3         5h
+default-token-qx6bb                kubernetes.io/service-account-token   3         4d
+heapster-token-5t58f               kubernetes.io/service-account-token   3         3h
+kube-router-token-ppfbx            kubernetes.io/service-account-token   3         3h
+kubernetes-dashboard-certs         Opaque                                0         1h
+kubernetes-dashboard-key-holder    Opaque                                2         2d
+kubernetes-dashboard-token-f8rd9   kubernetes.io/service-account-token   3         1h
+
+[root@SZ33SITQDB00AP0002 ~]# kubectl describe secrets/admin-token-gkmw6 -n kube-system
+Name:         admin-token-gkmw6
+Namespace:    kube-system
+Labels:       <none>
+Annotations:  kubernetes.io/service-account.name=admin
+              kubernetes.io/service-account.uid=430dd49e-e558-11e7-a8ec-005056abee15
+
+Type:  kubernetes.io/service-account-token
+
+Data
+====
+namespace:  11 bytes
+token:      eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJrdWJlcm5ldGVzL3NlcnZpY2VhY2NvdW50Iiwia3ViZXJuZXRlcy5pby9zZXJ2aWNlYWNjb3VudC9uYW1lc3BhY2UiOiJrdWJlLXN5c3RlbSIsImt1YmVybmV0ZXMuaW8vc2VydmljZWFjY291bnQvc2VjcmV0Lm5hbWUiOiJhZG1pbi10b2tlbi1na213NiIsImt1YmVybmV0ZXMuaW8vc2VydmljZWFjY291bnQvc2VydmljZS1hY2NvdW50Lm5hbWUiOiJhZG1pbiIsImt1YmVybmV0ZXMuaW8vc2VydmljZWFjY291bnQvc2VydmljZS1hY2NvdW50LnVpZCI6IjQzMGRkNDllLWU1NTgtMTFlNy1hOGVjLTAwNTA1NmFiZWUxNSIsInN1YiI6InN5c3RlbTpzZXJ2aWNlYWNjb3VudDprdWJlLXN5c3RlbTphZG1pbiJ9.UhY6rfM3cQz3rqVLXiyOeChF5qOUjFiiR6OgxIGmYhjUdHFb47rHwxWWcQ6QaUWhqtA9qWNV7cTiHAkZ975-JSl7uwM2FYYWtM3FtdO2Yugds75itLYObmoPfR16qXbnWVbPv5COrTbvby_p-KpEjAdTUo9_Tv6EKOyUfzz6I9fI9ktWBYNysgImVqeMTQ7hY0YycZ7I1utlbQezdrTH9nkUU3gwsolM3jl6a9o7jv_HJ1Ift3F74Civ79hW6vl-fcpMBkxBy5xDYq3lsZ-coIM7_L4-IlzoxRe2rxjRhE7M52bRBKNEbZmwnwO1IatWMmhq_LgYd_It11UltwAgWA
+ca.crt:     1363 bytes
+
+
+
+如果需要限定用户访问的空间，可以使用RABC规则绑定：
+
+
+创建用户认证授权的kubeconfig文件
+
+当我们安装好集群后，如果想要把 kubectl 命令交给用户使用，就不得不对用户的身份进行认证和对其权限做出限制。
+
+下面以创建一个 devuser 用户并将其绑定到 dev 和 test 两个 namespace 为例说明。
+
+创建 CA 证书和秘钥
+
+创建 devuser-csr.json 文件
+
+{
+  "CN": "devuser",
+  "hosts": [],
+  "key": {
+    "algo": "rsa",
+    "size": 2048
+  },
+  "names": [
+    {
+      "C": "CN",
+      "ST": "BeiJing",
+      "L": "BeiJing",
+      "O": "k8s",
+      "OU": "System"
+    }
+  ]
+}
+
+
+
+生成证书和私钥、执行该命令前请先确保该目录下已经包含如下文件：
+
+ca-key.pem  ca.pem ca-config.json  devuser-csr.json
+
+###
+cfssl gencert -ca=ca.pem -ca-key=ca-key.pem -config=ca-config.json -profile=kubernetes devuser-csr.json | cfssljson -bare devuser
+
+这将生成如下文件：
+
+devuser.csr  devuser-key.pem  devuser.pem
+创建 kubeconfig 文件
+
+# 设置集群参数
+export KUBE_APISERVER="https://172.20.0.113:6443"
+kubectl config set-cluster kubernetes \
+--certificate-authority=/etc/kubernetes/ssl/ca.pem \
+--embed-certs=true \
+--server=${KUBE_APISERVER} \
+--kubeconfig=devuser.kubeconfig
+
+# 设置客户端认证参数
+kubectl config set-credentials devuser \
+--client-certificate=/etc/kubernetes/ssl/devuser.pem \
+--client-key=/etc/kubernetes/ssl/devuser-key.pem \
+--embed-certs=true \
+--kubeconfig=devuser.kubeconfig
+
+# 设置上下文参数
+kubectl config set-context kubernetes \
+--cluster=kubernetes \
+--user=devuser \
+--namespace=dev \
+--kubeconfig=devuser.kubeconfig
+
+# 设置默认上下文
+kubectl config use-context kubernetes --kubeconfig=devuser.kubeconfig
+
+我们现在查看 kubectl 的 context：
+
+kubectl config get-contexts
+CURRENT   NAME              CLUSTER           AUTHINFO        NAMESPACE
+*         kubernetes        kubernetes        admin
+          default-context   default-cluster   default-admin
+显示的用户仍然是 admin，这是因为 kubectl 使用了 $HOME/.kube/config 文件作为了默认的 context 配置，我们只需要将其用刚生成的 devuser.kubeconfig 文件替换即可。
+
+cp -f ./devuser.kubeconfig /root/.kube/config
+
+
+如果我们想限制 devuser 用户的行为，需要使用 RBAC 将该用户的行为限制在某个或某几个 namespace 空间范围内，例如：
+
+kubectl create rolebinding devuser-admin-binding --clusterrole=admin --user=devuser --namespace=dev
+kubectl create rolebinding devuser-admin-binding --clusterrole=admin --user=devuser --namespace=test
+
+
+这样 devuser 用户对 dev 和 test 两个 namespace 具有完全访问权限。
+
+让我们来验证以下，现在我们在执行：
+
+# 获取当前的 context
+kubectl config get-contexts
+CURRENT   NAME         CLUSTER      AUTHINFO   NAMESPACE
+*         kubernetes   kubernetes   devuser    dev
+*         kubernetes   kubernetes   devuser    test
+
+# 无法访问 default namespace
+kubectl get pods --namespace default
+Error from server (Forbidden): User "devuser" cannot list pods in the namespace "default". (get pods)
+
+#默认访问的是 dev namespace，您也可以重新设置 context 让其默认访问 test namespace
+kubectl get pods
+No resources found.
+现在 kubectl 命令默认使用的 context 就是 devuser 了，且该用户只能操作 dev 和 test 这两个 namespace，并拥有完全的访问权限。
+
+
+
+
+

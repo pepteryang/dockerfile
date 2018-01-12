@@ -1,0 +1,81 @@
+apiVersion: extensions/v1beta1  
+kind: Deployment  
+metadata:
+  namespace: logging  
+  name: jenkins  
+spec:  
+  replicas: 1  
+  strategy:  
+    type: RollingUpdate  
+    rollingUpdate:  
+      maxSurge: 2  
+      maxUnavailable: 0  
+  template:  
+    metadata:  
+      labels:  
+        app: jenkins  
+    spec:
+      imagePullSecrets:
+      - name: registry.peter.com.key  
+      containers:  
+      - name: jenkins  
+        image: registry.peter.com/k8s-server/jenkins:v2.60.2  
+        imagePullPolicy: IfNotPresent  
+        ports:  
+        - containerPort: 8080  
+          name: web  
+          protocol: TCP  
+        - containerPort: 50000  
+          name: agent  
+          protocol: TCP  
+        volumeMounts:  
+        - name: jenkins-data
+          mountPath: /var/jenkins_home  
+        env:  
+        - name: JAVA_OPTS  
+          value: "-Duser.timezone=Asia/Shanghai"  
+  volumeClaimTemplates:
+  - metadata:
+      name: jenkins-data
+      annotations:
+        volume.beta.kubernetes.io/storage-class: "ceph-rbd-storage"
+    spec:
+      accessModes: [ "ReadWriteOnce" ]
+      resources:
+        requests:
+          storage: 2Gi
+
+---
+kind: Service  
+apiVersion: v1  
+metadata:  
+  labels:  
+      app: jenkins  
+  name: jenkins  
+spec:  
+  ports:  
+  - port: 8080  
+    targetPort: 8080  
+    name: web  
+  - port: 50000  
+    targetPort: 50000  
+    name: agent  
+  selector:  
+    app: jenkins 
+
+
+##jenkins-ingress
+---
+apiVersion: extensions/v1beta1  
+kind: Ingress  
+metadata:  
+  name: jenkins  
+spec:  
+  rules:  
+  - host: jenkins.peter.com 
+    http:  
+      paths:  
+      - path: /  
+        backend:  
+          serviceName: jenkins  
+          servicePort: 8080  

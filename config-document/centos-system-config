@@ -1,0 +1,24 @@
+#系统参数设置
+
+echo "net.ipv4.ip_forward = 1" >> /usr/lib/sysctl.d/50-default.conf
+echo "vm.max_map_count=300000" >> /usr/lib/sysctl.d/50-default.conf
+
+yum install ntp -y
+
+systemctl enable ntpd
+
+systemctl start ntpd
+systemctl stop firewalld
+systemctl disable firewalld
+
+iptables -F && iptables -X && iptables -F -t nat && iptables -X -t nat
+systemctl enable docker
+systemctl start docker
+
+###国内镜像
+cat > /etc/docker/daemon.json << EOF
+{
+"registry-mirrors": ["https://docker.mirrors.ustc.edu.cn", "hub-mirror.c.163.com"],
+"max-concurrent-downloads": 10
+}
+EOF

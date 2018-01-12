@@ -1,0 +1,51 @@
+cat > /etc/yum.repos.d/influxdb.repo << EOF
+[influxdb]
+name = InfluxDB Repository - RHEL \$releasever
+baseurl = https://repos.influxdata.com/centos/\$releasever/\$basearch/stable
+enabled = 1
+gpgcheck = 1
+gpgkey = https://repos.influxdata.com/influxdb.key
+EOF
+yum -y install influxdb
+
+service influxdb start
+###########################################################################
+#启动后TCP端口:8083 为InfluxDB 管理控制台
+#TCP端口:8086 为客户端和InfluxDB通信时的HTTP API
+#启动后InfluxDB用户认证默认是关闭的，先创建用户:geekwolf geekwolf
+#命令行输入influx
+###########################################################################
+创建数据库和用户并授权
+create database collectdb
+show databases
+create user cephuser with password 'cephuser'
+grant all on collectdb to cephuser
+
+sed -i 's#auth-enabled = false#auth-enabled = true#g' /etc/influxdb/influxdb.conf
+service influxdb restart
+
+yum -y  install collectd
+
+cat > /etc/collectd.conf << EOF
+BaseDir "/opt/collectd"
+PIDFile "/run/collectd.pid"
+Hostname "host.example.com"
+Interval 60
+loadplugin df
+Interval 120
+loadplugin
+LoadPlugin disk
+LoadPlugin interface
+LoadPlugin load
+LoadPlugin memory
+LoadPlugin network
+LoadPlugin processes
+LoadPlugin users
+<plugin interface>
+Interface "eth1"
+IgnoreSelected false
+</plugin>
+<plugin network>
+Server "10.44.38.244" "25826"
+</plugin>
+EOF

@@ -1,0 +1,36 @@
+kubectl proxy --address='10.10.29.3' --port=8086 --accept-hosts='^*$'
+
+最好吧Docker的日志格式修改为Json
+
+cat /etc/docker/daemon.json << EOF
+{
+  "log-driver": "json-file",
+  "log-opts": {
+    "labels": "production_status",
+    "env": "os,customer"
+  }
+}
+EOF
+
+给 Node 设置标签
+
+DaemonSet fluentd-es-v1.22 只会调度到设置了标签 beta.kubernetes.io/fluentd-ds-ready=true 的 Node，需要在期望运行 fluentd 的 Node 上设置该标签；
+
+[root@k8s-master efk]# kubectl get nodes
+NAME              STATUS    AGE       VERSION
+192.168.142.141   Ready     4d        v1.7.2
+192.168.142.142   Ready     4d        v1.7.2
+
+创建：
+kubectl label nodes 10.2.35.21 beta.kubernetes.io/fluentd-ds-ready=true 
+node "192.168.142.141" labeled
+
+查看：
+kubectl describe nodes 192.168.142.141
+删除：
+$ kubectl label nodes 192.168.142.141 beta.kubernetes.io/fluentd-ds-ready-
+node "192.168.142.141" labeled
+
+拍错处理
+
+kubectl logs kibana-logging-1886353244-3gg3h -n kube-system -f

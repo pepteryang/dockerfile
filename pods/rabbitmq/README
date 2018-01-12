@@ -1,0 +1,82 @@
+前面我们已经在Kubernetes上部署了Redis – 《在Kubernetes上使用Sateful Set部署Redis》。 本篇我们继续把RabbitMQ也跑在K8S上。
+
+1.RabbitMQ的基础知识
+
+在正式开始部署工作之前，我们先来复习一下RabbitMQ的一些基础知识。
+
+RabbitMQ内建的集群功能可以实现其高可用，允许消费者和生产者在RabbitMQ节点崩溃的情况下继续工作，同时可以通过添加更多的节点来提高消息处理的吞吐量。
+
+RabbitMQ内部主要包含以下四种Meta Data：
+
+vhost meta data：为RabbitMQ内部的Queue, Exchange, Binding提供命名空间级别的隔离
+exchange meta data：记录Exchange的名称、类型、属性等
+binding meta data：表示Routing Key和Queue之间的绑定关系，即描述如何将消息路由到队列Queue中
+queue meta data: 记录队列的名称及其属性
+单个节点的RabbitMQ会将这些meta data保存到内存中，同时对于那些属性为持久化的信息，例如durable的Exchange、Queue等持久化到硬盘上，持久化到硬盘上的Exchange和Queue可以在RabbitMQ节点重启后被重新创建。
+
+当以集群形式部署RabbitMQ的多个节点时，RabbitMQ集群需要新的meta data来保存集群的信息。RabbitMQ集群有以下两种模式：
+
+普通模式：在这种模式下，对于集群中rabbit1和rabbit2两个节点，一个消息只会存在于其中某个节点上的Queue上。rabbit1和rabbit2这两个节点仅仅是拥有相同的meta data，即队列的结构和属性。当consumer连接rabbi2消费rabbit1上的消息时，RabbitMQ会在这两个节点上进行消息传输，将rabbit1上的消息传输到rabbit2上。在该模式下consumer和producer应该尽量连接每个节点，在多个节点建立物理队列，这样也起到了线性扩展的作用。但是在这种模式下要考虑一种情况，某个节点挂掉时其上面还有没有被消费的消息：如果队列和消息都做了持久化，只有该节点恢复时，消息才可以继续被消费；如果队列和消息没有持久化的话，就会丢失消息。
+镜像模式：就是把队列做成镜像队列，存在于多个节点上，在该模式下，消息会在节点的镜像队列间做同步，这样可以实现RabbitMQ高可用，但会降低系统性能，特别是镜像队列数量较多，大量消息进入和同步时会占用集群内部大量带宽。因此镜像模式使用于对可靠性要求比较高的场景。
+接下来看一下镜像队列的声明，可以通过rabbitmqctl命令或在RabbitMQ Management WebUI中通过创建Policies的方式来声明镜像队列。例如：
+
+rabbitmqctl set_policy ha-all "^ha\." '{"ha-mode":"all"}'
+上面这个命令配置了策略，所有名称以ha.开始的队列，都会在集群的所有节点上成为镜像队列。这里使用的ha模式是all，另外还有exactly, nodes两种模式，分别可以指定具体的镜像节点数量，镜像节点名称，可以参考Highly Available (Mirrored) Queues，这里不再展开。
+
+通过上面对RabbitMQ基础知识的一个简单的回顾，在使用RabbitMQ需要考虑一下几点：
+
+Queue和Message是否要做持久化
+在使用RabbitMQ的集群时是否要使用镜像队列
+2.构建RabbitMQ Docker镜像
+
+RabbitMQ提供了一个Autocluster插件，可以自动创建RabbitMQ集群。下面我们将基于RabbitMQ的官方docker镜像，添加这个autocluster插件，构建我们自己的Rabbit镜像，以便在Kubernetes上使用这个镜像。
+
+
+这里选择是rabbitmq:3.6.11-management-alpine作为基础镜像
+添加了autocluster插件
+下面构建这个镜像，并将其推送到我们的私有仓库：
+
+docker build -t harbor.frognew.com/library/rabbitmq:3.6.11 .
+docker push harbor.frognew.com/library/rabbitmq
+3.以StatefulSet部署RabbitMQ
+
+接下来将以以StatefulSet部署RabbitMQ集群，我们继续使用Ceph的块存储RBD作为存储卷，将RabbitMQ的数据保存在Ceph RBD中。 这就需要对我们的Kubernetes和Ceph集群做一些准备工作，需要在Ceph中创建专门给Kubernetes使用的存储池，同时配置Kubernetes的Node节点访问Ceph，并在Kubernetes上创建StorageClass，关于这些内容不再展开，可以参考之前写的在Kubernetes上使用Sateful Set部署Redis中2.1~2.3的内容。
+
+前面在构建RabbitMQ的Docker镜像时，我们添加了autocluster插件，这个插件基于很多种backend做服务发现自动将发现的RabbitMQ节点添加到RabbitMQ集群中，autocluster当前支持如下几种backend：
+
+AWS EC2 tags
+AWS Autoscaling Groups
+Kubernetes
+DNS A records
+Consul
+etcd
+Kubernetes赫然在列，实际上当使用Kubernetes作为rabbitmq-autocluster的backend时，autocluster会通过访问Kubernetes的API Server获取RabbitMQ服务的endpoints，这样就能拿到Kubernete集群中的RabbitMQ的Pod的信息，从而可以将它们添加到RabbitMQ的集群中去。 这里也就是说要在autocluster实际上是在RabbitMQ Pod中要访问Kubernetes的APIServer。
+
+可是然后呢？因为已经对Kubernetes的API Server启用了TLS认证，同时也为API Server起到用了RBAC，要想从Pod中访问API Server需要借助Kubernetes的Service Account。 Service Account是Kubernetes Pod中的程序用于访问Kubernetes API的Account(账号)，它为Pod中的程序提供访问Kubernetes API的身份标识。下面我们创建rabbitmq Pod的ServiceAccount，并针对Kubernetes的endpoint资源做授权，创建相关的role和rolebinding。
+
+先说明一下，假设我们的部署是在dev这个namespace下的。创建如下的rabbitmq.rbac.yaml文件：
+
+在Kubernetes上创建rabbitmq这个ServiceAccount以及相关的role和rolebinding：
+
+kubectl create -f rabbitmq.rbac.yaml
+
+通过环境变量RABBITMQ_USE_LONGNAME, RABBITMQ_NODENAME, AUTOCLUSTER_TYPE, AUTOCLUSTER_DELAY, K8S_ADDRESS_TYPE, AUTOCLUSTER_CLEANUP等环境变量配置了autocluster插件，具体可以参考 RabbitMQ Autocluster中的文档内容
+通过RABBITMQ_ERLANG_COOKIE指定了Erlang cookie。RabbitMQ的集群是通过Erlang OTP实现的，而Erlang节点间通信的认证通过Erlang cookie来允许通信，这里从devsecret这个Secret中挂载。关于devsecret这个Secret这里不再给出。
+通过RABBITMQ_DEFAULT_USER和RABBITMQ_DEFAULT_PASS指定了RabbitMQ的管理员用户名和密码，也是从devsecret这个Secret中挂载的
+通过RABBITMQ_NODE_TYPE设置集群所有节点类型为disc，即为磁盘节点
+为了在Kubernetes上运行RabbitMQ集群，必须保证各个RabbitMQ节点之间可以通信，也就是SatefulSet的Pod可以通信。 采用的RabbitMQ节点的命名方式为rabbit@hostdomainname的形式：
+
+rabbit@rabbitmq-0.rabbit (rabbit@rabbitmq-0.rabbit.dev.svc.cluster.local)
+rabbit@rabbitmq-1.rabbit (rabbit@rabbitmq-1.rabbit.dev.svc.cluster.local)
+rabbit@rabbitmq-2.rabbit (rabbit@rabbitmq-2.rabbit.dev.svc.cluster.local)
+可以看出采用的是长节点名的命名方式，因此设置了RABBITMQ_USE_LONGNAME为true。为了保证节点间可以通过访问rabbitmq-0.rabbit, rabbitmq-1.rabbit, rabbitmq-2.rabbit这些域名通信，必须使用Headless Service，上面rabbitmq Service的clusterIP: None这个必须设置。
+
+在Kubernetes上创建Service和StatefulSet：
+
+kubectl create -f rabbitmq.statefulset.yaml
+
+kubectl get statefulset rabbitmq -n dev
+NAME       DESIRED   CURRENT   AGE
+rabbitmq   3         3         25m
+最后可以在RabbitMQ Management中查看RabbitMQ的3个节点已经组成了集群：
+

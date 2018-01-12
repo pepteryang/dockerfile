@@ -1,0 +1,9 @@
+启动命令
+
+kubectl create -f namespace-devops.yaml 
+kubectl create -f devops-ceph-secret.yaml 
+kubectl create -f redis-auth-secret.yaml 
+kubectl create -f devops-registry-secret.yaml 
+kubectl delete -f redis-master-statefulset.yaml 
+kubectl create -f redis-sentinel-statefulset.yaml 
+kubectl create -f redis-slave-statefulset.yaml

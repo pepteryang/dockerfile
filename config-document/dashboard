@@ -1,0 +1,50 @@
+
+#################################
+#创建docker-registry的登录secret#
+##################################
+cat ~/.docker/config.json | base64 -w 0
+
+ewoJImF1dGhzIjogewoJCSJyZWdpc3RyeS5wZXRlci5jb20iOiB7CgkJCSJhdXRoIjogIllXUnRhVzQ2YzI1bWJqQTJNVE5XVkVzPSIKCQl9Cgl9Cn0=
+
+cat > peter-registrykey.yaml <<EOF
+apiVersion: v1
+kind: Secret
+metadata:
+  name: peter-registrykey
+  namespace: default
+data:
+    .dockerconfigjson: "ewoJImF1dGhzIjogewoJCSJyZWdpc3RyeS5wZXRlci5jb20iOiB7CgkJCSJhdXRoIjogIllXUnRhVzQ2YzI1bWJqQTJNVE5XVkVzPSIKCQl9Cgl9Cn0="
+type: kubernetes.io/dockerconfigjson
+EOF
+
+kubectl create secret docker-registry registrykey-m2-1 --docker-server=registry.peter.com --docker-username=admin --docker-password=snfn0613VTK --docker-email=admin@peter.com
+
+cat > dashboard-rbac.yaml << EOF
+kind: ClusterRoleBinding
+apiVersion: rbac.authorization.k8s.io/v1beta1
+metadata:
+name: dashboard-admin
+roleRef:
+apiGroup: rbac.authorization.k8s.io
+kind: ClusterRole
+name: cluster-admin 
+subjects:
+- kind: ServiceAccount
+name: default
+namespace: kube-system
+EOF
+
+
+
+images=(heapster-amd64:v1.4.0 k8s-dns-sidecar-amd64:1.14.4 k8s-dns-kube-dns-amd64:1.14.4 k8s-dns-dnsmasq-nanny-amd64:1.14.4 fluentd-elasticsearch:1.23 kubernetes-dashboard-amd64:v1.6.1 elasticsearch:v2.4.1-2 defaultbackend:1.3 etcd-amd64:3.0.17 addon-resizer:1.7 heapster-grafana-amd64:v4.0.2 heapster-influxdb-amd64:v1.1.1 kibana:v4.6.1-1
+)
+for imageName in ${images[@]} ; do
+  docker pull gcr.io/google_containers/${imageName}
+  docker tag  gcr.io/google_containers/${imageName} registry.peter.com/k8s-server/${imageName}
+  docker push registry.peter.com/k8s-server/${imageName}
+  docker rmi gcr.io/google_containers/${imageName}
+done
+
+docker pull registry.peter.com/k8s-server/k8s-dns-dnsmasq-nanny-amd64:1.14.4
+docker pull registry.peter.com/k8s-server/k8s-dns-sidecar-amd64:1.14.4
+docker pull registry.peter.com/k8s-server/k8s-dns-kube-dns-amd64:1.14.4

@@ -1,0 +1,233 @@
+#!/bin/bash
+
+
+#yum install haproxy
+
+mkdir -pv /etc/kubernetes/ssl 
+
+cp -r /home/bqadm/node/ssl-key/* /etc/kubernetes/ssl
+cp -r /home/bqadm/node/kubelet /usr/local/bin/kubelet
+cp -r /home/bqadm/node/flannel/* /usr/local/bin/
+
+mkdir -pv /var/lib/kubelet
+chmod +x  /usr/local/bin/*
+
+
+#####################################################
+#生成客户端的kubelet.kubeconfig,默认在~/.kube/config
+#####################################################
+export KUBE_APISERVER="https://127.0.0.1:6443"
+
+#设置集群参数
+kubectl config set-cluster kubernetes \
+--certificate-authority=/etc/kubernetes/ssl/k8s-root-ca.pem \
+--embed-certs=true \
+--server=${KUBE_APISERVER}
+#设置客户端认证参数
+kubectl config set-credentials admin \
+--client-certificate=/etc/kubernetes/ssl/admin.pem \
+--embed-certs=true \
+--client-key=/etc/kubernetes/ssl/admin-key.pem
+# 设置上下文参数
+kubectl config set-context kubernetes \
+--cluster=kubernetes \
+--user=admin
+#设置默认上下文
+kubectl config use-context kubernetes
+
+cp ~/.kube/config /etc/kubernetes/ssl/kubelet.kubeconfig
+
+
+
+
+#原理参照 kubadm 和kargo  三个master做高可用所有node上安装haproxy 负载均衡反代三台kube-apiserver的8080端口 api-server为无状态服务
+ 
+#建议用haproxy反代,非常顺畅.
+#注意所有的机器的SELINUX=disabled  # 关闭
+#controller-manager 和scheduler 为有状态服务，同一时间只有一台当选，会在三台master机之间进行选举，由其中一台担任leader的角色
+ 
+
+cat > /etc/haproxy/haproxy.cfg << 'PETER'
+#---------------------------------------------------------------------
+# Example configuration for a possible web application.  See the
+# full configuration options online.
+#
+#   http://haproxy.1wt.eu/download/1.4/doc/configuration.txt
+#
+#---------------------------------------------------------------------
+ 
+#---------------------------------------------------------------------
+# Global settings
+#---------------------------------------------------------------------
+global
+    # to have these messages end up in /var/log/haproxy.log you will
+    # need to:
+    #
+    # 1) configure syslog to accept network log events.  This is done
+    #    by adding the '-r' option to the SYSLOGD_OPTIONS in
+    #    /etc/sysconfig/syslog
+    #
+    # 2) configure local2 events to go to the /var/log/haproxy.log
+    #   file. A line like the following can be added to
+    #   /etc/sysconfig/syslog
+    #
+    #
+    #log         127.0.0.1 local3
+ 
+    #local2.*    /var/log/haproxy.log
+    chroot      /var/lib/haproxy
+    pidfile     /var/run/haproxy.pid
+    maxconn     4000
+    user        haproxy
+    group       haproxy
+    daemon
+ 
+    # turn on stats unix socket
+    stats socket /var/lib/haproxy/stats
+ 
+#---------------------------------------------------------------------
+# common defaults that all the 'listen' and 'backend' sections will
+# use if not designated in their block
+#---------------------------------------------------------------------
+defaults
+    mode                    tcp
+    #log                     global
+    #option                  httplog
+    #option                  dontlognull
+    #option http-server-close
+    #option forwardfor       except 127.0.0.0/8
+    option                  redispatch
+    retries                 3
+    timeout connect         10s
+    timeout client          1m
+    timeout server          1m
+    timeout check           10s
+    maxconn                 3000
+ 
+#---------------------------------------------------------------------
+# main frontend which proxys to the backends
+#---------------------------------------------------------------------
+#---------------------------------------------------------------------
+listen test1
+    bind *:6443
+    mode tcp
+    balance     roundrobin
+    server  s1 10.83.36.59:6443
+    server  s2 10.83.36.60:6443
+    server  s3 10.83.36.61:6443
+PETER
+
+
+##################设置flanneld系统启动
+cat >/lib/systemd/system/flanneld.service  <<'PETER'
+[Unit]
+Description=Flanneld overlay address etcd agent
+After=network.target
+After=network-online.target
+Wants=network-online.target
+After=etcd.service
+Before=docker.service
+[Service]
+Type=notify
+ExecStart=/usr/local/bin/flanneld \
+-etcd-cafile=/etc/kubernetes/ssl/k8s-root-ca.pem \
+-etcd-certfile=/etc/kubernetes/ssl/kubernetes.pem \
+-etcd-keyfile=/etc/kubernetes/ssl/kubernetes-key.pem \
+-etcd-endpoints=https://10.83.36.59:2379,https://10.83.36.60:2379,https://10.83.36.61:2379 \
+-etcd-prefix=/kubernetes/network \
+-iface=eth0
+ExecStartPost=/usr/local/bin/mk-docker-opts.sh -k DOCKER_NETWORK_OPTIONS -d /run/flannel/docker
+Restart=on-failure
+[Install]
+WantedBy=multi-user.target
+RequiredBy=docker.service
+PETER
+
+
+
+cat > /lib/systemd/system/docker.service << 'PETER'
+[Unit]
+Description=Docker Application Container Engine
+Documentation=https://docs.docker.com
+After=network-online.target firewalld.service
+Wants=network-online.target
+
+[Service]
+Type=notify
+# the default is not to use systemd for cgroups because the delegate issues still
+# exists and systemd currently does not support the cgroup feature set required
+# for containers run by docker
+Environment="PATH=/bin:/sbin:/usr/bin:/usr/sbin"
+EnvironmentFile=-/run/flannel/docker
+ExecStart=/usr/bin/dockerd \
+          --exec-opt native.cgroupdriver=systemd \
+          $OPTIONS \
+          $DOCKER_STORAGE_OPTIONS \
+          $DOCKER_NETWORK_OPTIONS \
+          $ADD_REGISTRY \
+          $BLOCK_REGISTRY \
+          $INSECURE_REGISTRY
+#ExecStart=/usr/bin/dockerd
+ExecReload=/bin/kill -s HUP $MAINPID
+# Having non-zero Limit*s causes performance problems due to accounting overhead
+# in the kernel. We recommend using cgroups to do container-local accounting.
+LimitNOFILE=infinity
+LimitNPROC=infinity
+LimitCORE=infinity
+# Uncomment TasksMax if your systemd version supports it.
+# Only systemd 226 and above support this version.
+#TasksMax=infinity
+TimeoutStartSec=0
+# set delegate yes so that systemd does not reset the cgroups of docker containers
+Delegate=yes
+# kill only the docker process, not all processes in the cgroup
+KillMode=process
+# restart the docker process if it exits prematurely
+Restart=on-failure
+StartLimitBurst=3
+StartLimitInterval=60s
+
+[Install]
+WantedBy=multi-user.target
+PETER
+
+
+cat >/lib/systemd/system/kubelet.service  <<'PETER'
+[Unit]
+Description=Kubernetes Kubelet
+Documentation=https://github.com/GoogleCloudPlatform/kubernetes
+After=docker.service
+Requires=docker.service
+[Service]
+WorkingDirectory=/var/lib/kubelet
+ExecStart=/usr/local/bin/kubelet \
+--address=10.83.36.63 \
+--hostname-override=SZ33SITQDB00AP0004 \
+--pod-infra-container-image=sz33sitqdb00ap0007.bf.cn/public/pod-infrastructure:v1 \
+--experimental-bootstrap-kubeconfig=/etc/kubernetes/ssl/bootstrap.kubeconfig \
+--kubeconfig=/etc/kubernetes/ssl/kubelet.kubeconfig \
+--cert-dir=/etc/kubernetes/ssl \
+--hairpin-mode promiscuous-bridge \
+--allow-privileged=true \
+--serialize-image-pulls=false \
+--logtostderr=true \
+--cgroup-driver=systemd \
+--cluster_dns=10.254.0.2 \
+--cluster_domain=cluster.local \
+--v=2
+Restart=on-failure
+RestartSec=5
+[Install]
+WantedBy=multi-user.target
+PETER
+
+
+
+systemctl daemon-reload
+systemctl enable flanneld
+systemctl restart flanneld
+systemctl restart docker
+systemctl enable haproxy
+systemctl restart haproxy
+systemctl enable kubelet
+systemctl start kubelet

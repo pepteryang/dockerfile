@@ -1,0 +1,523 @@
+#!/bin/bash
+###############################################################
+#Kubernentes中的身份验证
+#kubernetes 系统的各组件需要使用 TLS 证书对通信进行加密，
+#本文档使用 CloudFlare 的 PKI 工具集 cfssl 来生成 Certificate Authority (CA) 和其它证书；
+#生成的 CA 证书和秘钥文件如下：
+#    ca-key.pem
+#    ca.pem
+#    kubernetes-key.pem
+#    kubernetes.pem
+#    kube-proxy.pem
+#    kube-proxy-key.pem
+#    admin.pem
+#    admin-key.pem
+#
+#使用证书的组件如下：
+#    etcd：使用 ca.pem、kubernetes-key.pem、kubernetes.pem；
+#    kube-apiserver：使用 ca.pem、kubernetes-key.pem、kubernetes.pem；
+#    kubelet：使用 ca.pem；
+#    kube-proxy：使用 ca.pem、kube-proxy-key.pem、kube-proxy.pem；
+#    kubectl：使用 ca.pem、admin-key.pem、admin.pem；
+#
+#kube-controller、kube-scheduler 当前需要和 kube-apiserver 部署在同一台机器上且使用非安全端口通信，故不需要证书。
+###############################################
+
+CFSSL_HOME_PATH="/opt/cfssl"
+CFSSL_LINUX_VERSION="R1.2"
+CFSSL_SSL_FILES_DIR=/opt/cfssl/ssl
+ETCD_K8S_MASTER_IP="10.2.35.25"
+K8S_MASTER_NAME="k8s-master"
+ETCD_DATA_FILE="/data/etcd"
+ETCD_WORK_DIR="/var/lib/etcd"
+ETCD_CONF_DIR="/etc/etcd"
+K8S_CONF_DIR="/etc/kubernetes"
+KUBE_EXEC_BIN_DIR="/usr/local/bin"
+K8S_BIN_BACK_DIR="/opt/kubernetes"
+K8S_LOG_FILE_DIR="/data/logs/kubernete"
+################FLANNEL配置
+FLANNEL_BIN_DIR="/opt/flannel"
+FLANNEL_VER=v0.8.0
+FLANNEL_DOWNLOAD_URL=https://github.com/coreos/flannel/releases/download
+
+################ETCD配置参数
+K8S_ETCD_BIN_DIR="/opt/etcd"
+KUBE_ETCD_VER=v3.2.4
+KUBE_ETCD_DOWNLOAD_URL=https://github.com/coreos/etcd/releases/download
+
+######################KUBERNETES配置参数
+KUBE_URL="https://github.com/kubernetes/kubernetes/releases/download/"
+KUBERNETES_VERSION="v1.7.2"
+
+###############配置kubernetes服务启动配置文件：
+hostnamectl set-hostname ${K8S_MASTER_NAME}
+echo >> /etc/hosts << EOF
+${HOST_IP} ${K8S_MASTER_NAME}
+EOF
+
+mkdir -pv ${CFSSL_HOME_PATH}/bin
+mkdir -pv ${CFSSL_SSL_FILES_DIR}
+mkdir -pv ${ETCD_CONF_DIR}/ssl
+mkdir -pv ${ETCD_WORK_DIR}
+mkdir -pv ${ETCD_CONF_DIR}
+mkdir -pv ${ETCD_DATA_FILE}
+mkdir -pv ${K8S_CONF_DIR}/ssl
+mkdir -pv ${K8S_CONF_DIR}
+mkdir -pv ${K8S_LOG_FILE_DIR}
+mkdir -pv ${K8S_ETCD_BIN_DIR}
+mkdir -pv ${K8S_BIN_BACK_DIR}
+mkdir -pv ${FLANNEL_BIN_DIR}
+
+#######################
+#下载CFSSL的二进制文件
+########################
+#curl -L https://pkg.cfssl.org/${CFSSL_LINUX_VERSION}/cfssl_linux-amd64 -o ${CFSSL_HOME_PATH}/bin/cfssl
+#curl -L https://pkg.cfssl.org/${CFSSL_LINUX_VERSION}/cfssljson_linux-amd64 -o ${CFSSL_HOME_PATH}/bin/cfssljson
+#curl -L https://pkg.cfssl.org/${CFSSL_LINUX_VERSION}/cfssl-certinfo_linux-amd64 -o ${CFSSL_HOME_PATH}/bin/cfssl-certinfo
+
+#chmod +x ${CFSSL_HOME_PATH}/bin/cfssl ${CFSSL_HOME_PATH}/bin/cfssljson ${CFSSL_HOME_PATH}/bin/cfssl-certinfo
+
+###################
+#设置可执行文件链接
+###################
+#ln -s ${CFSSL_HOME_PATH}/bin/cfssl /usr/local/bin/cfssl
+#ln -s ${CFSSL_HOME_PATH}/cfssl-certi /usr/local/bin/cfssl-certi
+#ln -s ${CFSSL_HOME_PATH}/cfssljson /usr/local/bin/cfssljson
+
+##################
+#ETCD设置
+##################
+#curl -L ${KUBE_ETCD_DOWNLOAD_URL}/${KUBE_ETCD_VER}/etcd-${KUBE_ETCD_VER}-linux-amd64.tar.gz -o /root/etcd-${KUBE_ETCD_VER}-linux-amd64.tar.gz
+#tar xzvf /root/etcd-${KUBE_ETCD_VER}-linux-amd64.tar.gz -C ${K8S_ETCD_BIN_DIR} --strip-components=1
+#ln -s ${K8S_ETCD_BIN_DIR}/etcd ${KUBE_EXEC_BIN_DIR}/etcd
+#ln -s ${K8S_ETCD_BIN_DIR}/etcdctl ${KUBE_EXEC_BIN_DIR}/etcdctl
+
+###################
+#配置FLANNEL
+###################
+#curl -L ${FLANNEL_DOWNLOAD_URL}/${FLANNEL_VER}/flannel-${FLANNEL_VER}-linux-amd64.tar.gz -o /root/flannel-${FLANNEL_VER}-linux-amd64.tar.gz
+#tar xzvf /root/flannel-${FLANNEL_VER}-linux-amd64.tar.gz -C /opt/${FLANNEL_BIN_DIR} --strip-components=1
+#ln -s ${FLANNEL_BIN_DIR}/flanneld ${KUBE_EXEC_BIN_DIR}/flanneld
+#ln -s ${FLANNEL_BIN_DIR}/mk-docker-opts.sh ${KUBE_EXEC_BIN_DIR}/mk-docker-opts.sh
+#chmod +x ${KUBE_EXEC_BIN_DIR}/mk-docker-opts.sh
+
+
+#cfssl print-defaults config > ${CFSSL_SSL_FILES_DIR}/ca-config.json
+#cfssl print-defaults csr > ${CFSSL_SSL_FILES_DIR}/ca-csr.json
+
+
+cat > ${CFSSL_SSL_FILES_DIR}/ca-config.json << EOF
+{
+  "signing": {
+    "default": {
+      "expiry": "8760h"
+    },
+    "profiles": {
+      "kubernetes": {
+        "usages": [
+            "signing",
+            "key encipherment",
+            "server auth",
+            "client auth"
+        ],
+        "expiry": "8760h"
+      }
+    }
+  }
+}
+EOF
+
+###########################
+#字段说明
+#
+#    ca-config.json：可以定义多个 profiles，分别指定不同的过期时间、使用场景等参数；后续在签名证书时使用某个 profile；
+#    signing：表示该证书可用于签名其它证书；生成的 ca.pem 证书中 CA=TRUE；
+#    server auth：表示client可以用该CA对server提供的证书进行验证；
+#    client auth：表示server可以用该CA对client提供的证书进行验证；
+############################
+
+cat > ${CFSSL_SSL_FILES_DIR}/ca-csr.json << EOF
+{
+    "CN": "kubernetes",
+    "key": {
+        "algo": "rsa",
+        "size": 2048
+    },
+    "names": [
+        {
+            "C": "CN",
+            "L": "shenzhen",
+            "O": "k8s",
+            "OU": "System",
+            "ST": "shenzhen"
+        }
+    ]
+}
+EOF
+#############################
+#字段说明
+#    “CN”：Common Name，kube-apiserver 从证书中提取该字段作为请求的用户名 (User Name)；浏览器使用该字段验证网站是否合法；
+#    “O”：Organization，kube-apiserver 从证书中提取该字段作为请求用户所属的组 (Group)；
+#############################
+#创建 kubernetes 证书签名请求
+#############################
+
+cat > ${CFSSL_SSL_FILES_DIR}/kubernetes-csr.json << EOF
+{
+    "CN": "kubernetes",
+    "hosts": [
+      "127.0.0.1",
+      "${ETCD_K8S_MASTER_IP}",
+      "10.254.0.1",
+      "kubernetes",
+      "kubernetes.default",
+      "kubernetes.default.svc",
+      "kubernetes.default.svc.cluster",
+      "kubernetes.default.svc.cluster.local"
+    ],
+    "key": {
+        "algo": "rsa",
+        "size": 2048
+    },
+    "names": [
+        {
+            "C": "CN",
+            "ST": "shenzhen",
+            "L": "shenzhen",
+            "O": "k8s",
+            "OU": "System"
+        }
+    ]
+}
+EOF
+#################################################################
+#
+#如果 hosts 字段不为空则需要指定授权使用该证书的 IP #或域名列表，由于该证书后续被 etcd 集群和 kubernetes master #集群使用，所以上面分别指定了 etcd 集群、kubernetes master 集群的主机 IP #和 kubernetes 服务的服务 IP（一般是 kue-apiserver 指定的 #service-cluster-ip-range 网段的第一个IP，如 10.254.0.1。
+#
+#################################################################
+
+###########################
+#生成 kubernetes 证书和私钥
+###########################
+
+########################
+#创建 admin 证书签名请求
+#后续 kube-apiserver 使用 RBAC 对客户端(如 #kubelet、kube-proxy、Pod)请求进行授权；
+#kube-apiserver 预定义了一些 RBAC 使用的 RoleBindings，如 cluster-admin 
+#将 Groupsystem:masters 与 Role cluster-admin 绑定，该 Role 授予了调用kube-apiserver 的所有 API的权限；
+#OU 指定该证书的 Group 为 system:masters，kubelet 使用该证书访问 kube-apiserver时 ，
+#由于证书被 CA 签名，所以认证通过，同时由于证书用户组为经过预授权的system:masters，
+#所以被授予访问所有 API 的权限；
+#########################
+cat > ${CFSSL_SSL_FILES_DIR}/admin-csr.json << EOF
+{
+  "CN": "admin",
+  "hosts": [],
+  "key": {
+    "algo": "rsa",
+    "size": 2048
+  },
+  "names": [
+    {
+      "C": "CN",
+      "ST": "shenzhen",
+      "L": "shenzhen",
+      "O": "system:masters",
+      "OU": "System"
+    }
+  ]
+}
+EOF
+
+###############################
+#创建 kube-proxy 证书签名请求
+###############################
+#CN 指定该证书的 User 为 system:kube-proxy；
+#kube-apiserver 预定义的 RoleBinding cluster-admin 将User system:kube-proxy 与 Rolesystem:node-proxier 绑定
+#该Role 授予了调用 kube-apiserver Proxy 相关 API 的权限；
+################################
+cat > ${CFSSL_SSL_FILES_DIR}/kube-proxy-csr.json << EOF
+{
+  "CN": "system:kube-proxy",
+  "hosts": [],
+  "key": {
+    "algo": "rsa",
+    "size": 2048
+  },
+  "names": [
+    {
+      "C": "CN",
+      "ST": "shenzhen",
+      "L": "shenzhen",
+      "O": "k8s",
+      "OU": "System"
+    }
+  ]
+}
+EOF
+
+
+#############################
+#生成证书和私钥
+#############################
+
+cd ${CFSSL_SSL_FILES_DIR}
+cfssl gencert -initca ca-csr.json | cfssljson -bare ca
+cfssl gencert -ca=ca.pem -ca-key=ca-key.pem -config=ca-config.json -profile=kubernetes kubernetes-csr.json | cfssljson -bare kubernetes
+cfssl gencert -ca=ca.pem -ca-key=ca-key.pem -config=ca-config.json -profile=kubernetes admin-csr.json | cfssljson -bare admin
+cfssl gencert -ca=ca.pem -ca-key=ca-key.pem -config=ca-config.json -profile=kubernetes kube-proxy-csr.json | cfssljson -bare kube-proxy
+
+#######################
+#使用 Cfssl-Certinfo 检测信息
+#######################
+#确认 Issuer 字段的内容和 ca-csr.json 一致；
+#确认 Subject 字段的内容和 kubernetes-csr.json 一致；
+#确认 X509v3 Subject Alternative Name 字段的内容和 kubernetes-csr.json 一致；
+#确认 X509v3 Key Usage、Extended Key Usage 字段的内容和 ca-config.json 中 kubernetesprofile 一致；
+######################
+#openssl x509  -noout -text -in  kubernetes.pem
+#
+#cfssl-certinfo -cert kubernetes.pem
+#
+######################
+#分发证书
+#将生成的证书和秘钥文件（后缀名为.pem）拷贝到所有机器的 /etc/kubernetes/ssl 目录下备用
+######################
+cp *.pem /etc/kubernetes/ssl
+cp etcd*.pem /etc/etcd/ssl/
+
+
+
+
+
+
+
+
+
+#################################
+#配置ETCD的认证的证书和私钥(单机版)
+#ETCD使用kubernetes的证认证
+################################
+
+cat > /etc/etcd/etcd.conf << EOF
+ETCD_DATA_DIR="/var/lib/etcd/default.etcd" 
+#监听URL，用于与其他节点通讯 
+ETCD_LISTEN_PEER_URLS="https://${ETCD_K8S_MASTER_IP}:2380" 
+#告知客户端的URL, 也就是服务的URL 
+ETCD_LISTEN_CLIENT_URLS="https://${ETCD_K8S_MASTER_IP}:2379,https://${ETCD_K8S_MASTER_IP}:4001" 
+#表示监听其他节点同步信号的地址 
+ETCD_INITIAL_ADVERTISE_PEER_URLS="https://${ETCD_K8S_MASTER_IP}:2380" 
+#–advertise-client-urls 告知客户端的URL, 也就是服务的URL，tcp2379端口用于监听客户端请求 
+ETCD_ADVERTISE_CLIENT_URLS="https://${ETCD_K8S_MASTER_IP}:2379" 
+#启动参数配置 ETCD_NAME="node1" 
+ETCD_INITIAL_CLUSTER="${K8S_MASTER_NAME}=https://${ETCD_K8S_MASTER_IP}:2380" 
+ETCD_INITIAL_CLUSTER_STATE="new" 
+
+#[security] 
+
+ETCD_CERT_FILE="${ETCD_CONF_DIR}/ssl/kubernetes.pem" 
+ETCD_KEY_FILE="${ETCD_CONF_DIR}/ssl/kubernetes-key.pem" 
+ETCD_TRUSTED_CA_FILE="${K8S_CONF_DIR}/ssl/ca.pem" 
+ETCD_CLIENT_CERT_AUTH="true" 
+ETCD_PEER_CERT_FILE="${ETCD_CONF_DIR}/ssl/kubernetes.pem" 
+ETCD_PEER_KEY_FILE="${ETCD_CONF_DIR}/ssl/kubernetes-key.pem" 
+ETCD_PEER_TRUSTED_CA_FILE="${K8S_CONF_DIR}/ssl/ca.pem" 
+ETCD_PEER_CLIENT_CERT_AUTH="true" 
+
+#[logging] 
+ETCD_DEBUG="true" 
+ETCD_LOG_PACKAGE_LEVELS="etcdserver=WARNING,security=DEBUG"
+EOF
+
+#################设置启动服务
+cat > /usr/lib/systemd/system/etcd.service << EOF
+[Unit]
+Description=Eted Server 
+After=network.target
+
+[Service]
+WorkingDirectory=${KUBE_ETCD_WORK}
+EnvironmentFile=-${ETCD_CONF_DIR}/etcd.conf
+ExecStart=${KUBE_EXEC_BIN_DIR}/etcd
+Type=notify
+Restart=on-failure
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+################配置FLANNELD文件(参照yum 安装的设置相关文件）
+cat > /etc/sysconfig/flanneld << EOF
+# Flanneld configuration options  
+
+# etcd url location.  Point this to the server where etcd runs
+FLANNEL_ETCD_ENDPOINTS="http://127.0.0.1:2379"
+
+# etcd config key.  This is the configuration key that flannel queries
+# For address range assignment
+FLANNEL_ETCD_PREFIX="/k8s/network"
+
+# Any additional options that you want to pass
+#FLANNEL_OPTIONS=""
+EOF
+#####################设置flannel的
+cat > ${KUBE_EXEC_BIN_DIR}flanneld-start << EOF
+#!/bin/sh
+
+exec ${KUBE_EXEC_BIN_DIR}/flanneld \\
+	-etcd-endpoints=\${FLANNEL_ETCD_ENDPOINTS:-\${FLANNEL_ETCD}} \\
+	-etcd-prefix=\${FLANNEL_ETCD_PREFIX:-\${FLANNEL_ETCD_KEY}} \\
+	"\$@"
+EOF
+##################设置flanneld系统启动
+cat > /usr/lib/systemd/system/flanneld.service << EOF
+[Unit]
+Description=Flanneld overlay address etcd agent
+After=network.target
+After=network-online.target
+Wants=network-online.target
+After=etcd.service
+Before=docker.service
+
+[Service]
+Type=notify
+EnvironmentFile=/etc/sysconfig/flanneld
+EnvironmentFile=-/etc/sysconfig/docker-network
+ExecStart=${KUBE_EXEC_BIN_DIR}/flanneld-start \$FLANNEL_OPTIONS
+ExecStartPost=${KUBE_EXEC_BIN_DIR}/mk-docker-opts.sh -k DOCKER_NETWORK_OPTIONS -d /run/flannel/docker
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
+RequiredBy=docker.service
+EOF
+
+###############配置kubernetes服务启动配置文件：
+cat > $K8S_CONF_DIR/config << EOF
+KUBE_LOGTOSTDERR="--logtostderr=false"
+KUBE_LOG_DIR="--log-dir=${K8S_LOG_FILE_DIR}"
+KUBE_LOG_LEVEL="--v=2"
+KUBE_ALLOW_PRIV="--allow-privileged=false"
+KUBE_MASTER="--master=$KUBE_MASTER_HTTP"
+EOF
+
+###########配置kubernetes启动文件###################
+cat > /usr/lib/systemd/system/kube-apiserver.service << EOF
+[Unit]
+Description=Kubernetes API Server
+Documentation=https://github.com/GoogleCloudPlatform/kubernetes
+After=network.target
+After=etcd.service
+
+[Service]
+EnvironmentFile=-$K8S_CONF_DIR/config
+EnvironmentFile=-$K8S_CONF_DIR/apiserver
+ExecStart=${KUBE_EXEC_BIN_DIR}/kube-apiserver \\
+   \$KUBE_LOGTOSTDERR \\
+   \$KUBE_LOG_LEVEL \\
+   \$KUBE_ETCD_SERVERS \\
+   \$KUBE_API_ADDRESS \\
+   \$KUBE_API_PORT \\
+   \$KUBELET_PORT \\
+   \$KUBE_ALLOW_PRIV \\
+   \$KUBE_SERVICE_ADDRESSES \\
+   \$KUBE_ADMISSION_CONTROL \\
+   \$KUBE_API_ARGS
+Restart=on-failure
+Type=notify
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target
+EOF
+############配置kuber-apiserver启动参数##################
+
+cat > $K8S_CONF_DIR/apiserver << EOF
+KUBE_API_ADDRESS="--insecure-bind-address=0.0.0.0 --insecure-port=8080"
+KUBE_ETCD_SERVERS="--etcd-servers=$KUBE_ETCD_SRV"
+KUBE_SERVICE_ADDRESSES="--service-cluster-ip-range=172.16.0.0/16"
+KUBE_ADMISSION_CONTROL="--admission-control=NamespaceLifecycle,NamespaceExists,LimitRanger,SecurityContextDeny,ServiceAccount,ResourceQuota"
+KUBE_API_ARGS=""
+EOF
+
+######################部署kube-controller-manager服务
+cat > /usr/lib/systemd/system/kube-controller-manager.service << EOF
+[Unit]
+Description=Kubernetes Controller Manager
+Documentation=https://github.com/GoogleCloudPlatform/kubernetes
+After=kube-apiserver.service
+Requires=kube-apiserver.service
+
+[Service]
+EnvironmentFile=-$K8S_CONF_DIR/config
+EnvironmentFile=-$K8S_CONF_DIR/controller-manager
+ExecStart=$KUBE_BIN_DIR/kube-controller-manager \\
+   \$KUBE_LOGTOSTDERR \\
+   \$KUBE_LOG_LEVEL \\
+   \$KUBE_LOG_DIR \\
+   \$KUBE_MASTER \\
+   \$KUBE_CONTROLLER_MANAGER_ARGS
+Restart=on-failure
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+#####################配置kube-controller-manager启动参数
+cat > $K8S_CONF_DIR/controller-manager << EOF
+KUBE_CONTROLLER_MANAGER_ARGS=""
+EOF
+
+#####################部署kube-scheduler服务
+cat > /usr/lib/systemd/system/kube-scheduler.service << EOF
+[Unit]
+Description=Kubernetes Scheduler Plugin
+Documentation=https://github.com/GoogleCloudPlatform/kubernetes
+After=kube-apiserver.service
+Requires=kube-apiserver.service
+
+[Service]
+EnvironmentFile=-$K8S_CONF_DIR/config
+EnvironmentFile=-$K8S_CONF_DIR/scheduler
+ExecStart=${KUBE_EXEC_BIN_DIR}/kube-scheduler \\
+            \$KUBE_LOGTOSTDERR \\
+            \$KUBE_LOG_LEVEL \\
+            \$KUBE_LOG_DIR \\
+            \$KUBE_MASTER \\
+            \$KUBE_SCHEDULER_ARGS
+Restart=on-failure
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+#######################配置kube-schedulerr启动参数
+cat > $K8S_CONF_DIR/scheduler << EOF
+KUBE_SCHEDULER_ARGS=""
+EOF
+
+#######################
+#启动kube-scheduler服务
+########################
+systemctl daemon-reload
+systemctl enable etcd.service
+systemctl start etcd.service
+
+#######################################
+#配置etcd （也就是DOCKER使用的内部网络）
+#######################################
+etcdctl set /k8s/network/config '{ "Network": "10.10.0.0/16" }'
+###########################
+systemctl enable kube-scheduler
+systemctl enable kube-apiserver.service
+systemctl enable kube-controller-manager
+systemctl start kube-apiserver.service
+systemctl start kube-controller-manager
+systemctl start kube-scheduler
+systemctl enable flanneld.service
+systemctl stop docker.service
+systemctl start flanneld.service
+systemctl stop docker.service

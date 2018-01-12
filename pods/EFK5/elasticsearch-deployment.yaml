@@ -1,0 +1,54 @@
+---
+apiVersion: extensions/v1beta1
+kind: Deployment
+metadata:
+  name: elasticsearch
+  namespace: logging
+  labels:
+    app: elasticsearch
+spec:
+  replicas: 1
+  template:
+    metadata:
+      name: elasticsearch
+      labels:
+        app: elasticsearch
+    spec:
+      containers:
+      - name: elasticsearch
+        image: registry.peter.com/k8s-server/elasticsearch:v5.5.1-1:5
+        ports:
+        - containerPort: 9200
+        - containerPort: 9300
+        env:
+        - name: ES_JAVA_OPTS
+          value: "-Xms4g -Xmx4g"
+        volumeMounts:
+        - name: es-rbd-volume
+          mountPath: /usr/share/elasticsearch/data
+      imagePullSecrets:
+      - name: registry.peter.com.key
+      volumes:
+      - name: es-rbd-volume
+        persistentVolumeClaim:
+          claimName: es-volume-claim
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: elasticsearch
+  namespace: logging
+spec:
+  type: NodePort
+  selector:
+    app: elasticsearch
+  ports:
+  - name: http
+    port: 9200
+    protocol: TCP
+    nodePort: 30200
+  - name: transport
+    port: 9300
+    protocol: TCP
+    nodePort: 30300
